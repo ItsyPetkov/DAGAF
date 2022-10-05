@@ -55,6 +55,14 @@ class Discriminator(nn.Module):
         self.seq = Sequential(*seq)
         self.init_weights()
         
+        self.var_out_ftrs = [3, 4, 1, 1, 1, 1, 1, 1, 1, 1] 
+        # discrete var 1:
+        self.embed1 =   nn.Embedding(self.var_out_ftrs[0], self.var_out_ftrs[0])
+        self.linear_map1 = nn.Linear(self.var_out_ftrs[0], 1)
+        # discrete var 2:
+        self.embed2 =   nn.Embedding(self.var_out_ftrs[1], self.var_out_ftrs[1])
+        self.linear_map2 = nn.Linear(self.var_out_ftrs[1], 1)
+
     def init_weights(self):
         for m in self.modules():
             if isinstance(m, Linear):
@@ -89,11 +97,25 @@ class Discriminator(nn.Module):
         ) ** 2).mean() * lambda_
 
         return gradient_penalty
-
+        
     def forward(self, input):
         assert input.size()[0] % self.pac == 0
-        return self.seq(input.view(-1, self.pacdim))
-    
+        # batch size must be divisible by pac=10
+        discrete_vars, cont_vars = input['discrete'], input['continuous']
+        
+        ''' map discrete variables through embedding then linear layer '''
+        d1 = discrete_vars[0]
+        d1 = self.linear1(self.embed1(d1)) 
+        # variable is now 1-dim real --> concatenate
+
+        d2 = discrete_vars[1]
+        d2 = self.linear2(self.embed2(d2)) 
+        # variable is also now 1-dim real --> concatenate
+
+        # concatenate all variables (each 1-dim)
+        x = torch.cat((d1, d2, cont_vars), dim=1)
+
+        return self.seq(x.view(-1, self.pacdim))
 class Generator(nn.Module):
     """Generator module (based on DAG-NotearsMLP)
         
@@ -105,12 +127,14 @@ class Generator(nn.Module):
             --> (l 154--161) replaced for loop to iterate over each dth variable separately,
                 rather than constructing all 10 local layers at same time.
                 means we can specify output dim for each var (e.g 3 for discrete, 1 for cont.). 
+            --> added "if var_dim>1: then discrete=True" flag for F.softmax() functionality.
 
         - forward(): lines 179--190.
             --> added processing steps to make sure we can concatenate 
                 discrete + continuous into one vector X.
                 makes use of embedding+mapping (see last point).
             --> (194--200) concatenate noise with hidden act for sampling each local layer.
+            --> added flag for passing x_tilde through F.softmax() if discrete
            
         - LocallyConnected: line 241 etal.
             --> changed attributes, so now num_linear is removed. 
@@ -118,6 +142,7 @@ class Generator(nn.Module):
                 of each local linear separately now.
             --> input_features = d+1: we are looking to concatenate noise (z)
                 into each local layer, which will have channel_dim=1.
+            --> added discrete flag to control whether F.softmax() used or not 
 
     """
     def __init__(self, dims, args, bias=True):
@@ -156,8 +181,12 @@ class Generator(nn.Module):
         layers = []
         for l in range(self.d): # for each output variable,
             # construct a local linear layer matched to its dim
-            ### we need to concatenate noise at each local layer, so input_ftrs = d+1
-            layers.append(LocallyConnected(input_features=self.d+self.noise_dim, output_features=self.var_out_ftrs[l], bias=bias))
+            #### we need to concatenate noise at each local layer, so input_ftrs = d+1
+            if self.var_out_ftrs[l] > 1:
+                # discrete vars will have more than 1 'class', so turn discrete flag ON.
+                layers.append(LocallyConnected(input_features=self.d+1, output_features=self.var_out_ftrs[l], bias=bias, discrete=True))
+            else:
+                layers.append(LocallyConnected(input_features=self.d+1, output_features=self.var_out_ftrs[l], bias=bias, discrete=False))
         self.fc2 = nn.ModuleList(layers)
         # list of 10 linear layers  
 
@@ -192,12 +221,25 @@ class Generator(nn.Module):
 
         x = self.fc1_pos(x) - self.fc1_neg(x)  # [n, d * m1]
         x = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
+
+        fake_data = []
         for fc in self.fc2:
             x = torch.sigmoid(x)  # [n, d, m1] 
             # is this an activation function?
-            z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.noise_dim)))).double().cuda()
-            x = torch.cat((x, z),dim=1)
+            z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, 1)))).double().cuda()
+            x = torch.cat((x, z), dim=1)
             x = fc(x)  # [n, d, m2]
+            # needs to have F.softmax() for discrete layers:
+            # outputs then need to be concatenated:
+            # - contin: 1-dim
+            # - discre: C-dim. This means, we'll have a list of probs at the dth node that are 
+            #                  then compared to the list of target probs. The loss then measures
+            #                  CE between: CE(preds, target) one-hot labels. Accuracy computed
+            #                  by argmax(preds), and counting how many in the batch were correctly
+            #                  'classified'.
+            if fc.discrete:
+                xd_tilde = F.softmax(xd_tilde)
+            # fake_data.append(xd_tilde)
         x = x.squeeze(dim=2)  # [n, d]
         return x
 
@@ -252,10 +294,17 @@ class LocallyConnected(nn.Module):
     Attributes:
         weight: [d, m1, m2]
         bias: [d, m2]
+
+
+    Changes by Calum (5/10/22):
+    - new attribute: line 293
+        --> self.discrete: useful flag during forward(). 
+                           means we can call F.softmax() if discrete=True, otherwise not.
+
     """
 
     # def __init__(self, num_linear, input_features, output_features, bias=True):
-    def __init__(self, input_features, output_features, bias=True):
+    def __init__(self, input_features, output_features, bias=True, discrete=False):
         super(LocallyConnected, self).__init__()
         # self.num_linear = num_linear # dont need this, since we construct 1 at a time now
         self.input_features = input_features
@@ -271,6 +320,8 @@ class LocallyConnected(nn.Module):
             self.register_parameter('bias', None)
 
         self.reset_parameters()
+
+        self.discrete = discrete
 
     @torch.no_grad()
     def reset_parameters(self):
