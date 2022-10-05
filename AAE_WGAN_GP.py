@@ -95,23 +95,71 @@ class Discriminator(nn.Module):
         return self.seq(input.view(-1, self.pacdim))
     
 class Generator(nn.Module):
-    """Generator module (based on DAG-NotearsMLP)"""
-    def __init__(self, dims, bias=True):
+    """Generator module (based on DAG-NotearsMLP)
+        
+    Changes by Calum (5th Oct 2022)
+    - Generator:
+        - new attributes: lines 129--146.
+            --> var_out_ftrs: for specifying out_features needed in each local linear layer
+            --> embed and linear_map: for mapping discrete vars into contin. representations
+            --> (l 154--161) replaced for loop to iterate over each dth variable separately,
+                rather than constructing all 10 local layers at same time.
+                means we can specify output dim for each var (e.g 3 for discrete, 1 for cont.). 
+
+        - forward(): lines 179--190.
+            --> added processing steps to make sure we can concatenate 
+                discrete + continuous into one vector X.
+                makes use of embedding+mapping (see last point).
+            --> (194--200) concatenate noise with hidden act for sampling each local layer.
+           
+        - LocallyConnected: line 241 etal.
+            --> changed attributes, so now num_linear is removed. 
+                reason is that we need to construct the weight(+bias) matrix dimension
+                of each local linear separately now.
+            --> input_features = d+1: we are looking to concatenate noise (z)
+                into each local layer, which will have channel_dim=1.
+
+    """
+    def __init__(self, dims, args, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
         d = dims[0]
         self.dims = dims
+
+        '''____________________ new attributes 
+        '''
+        # out_features for each variable: here, first 2 vars are discrete, rest are contin.
+        # with 3 and 4 classes, respectively (e.g. d1={low, med, high}, d2={cat,dog,sheep,cow})
+        self.var_out_ftrs = [3, 4, 1, 1, 1, 1, 1, 1, 1, 1] 
+        # discrete var 1:
+        self.embed1 =   nn.Embedding(self.var_out_ftrs[0], self.var_out_ftrs[0])
+        self.linear_map1 = nn.Linear(self.var_out_ftrs[0], 1)
+        # discrete var 2:
+        self.embed2 =   nn.Embedding(self.var_out_ftrs[1], self.var_out_ftrs[1])
+        self.linear_map2 = nn.Linear(self.var_out_ftrs[1], 1)
+        
+        # for sampling noise in each local layer
+        self.batch_size = args.batch_size
+        self.d = args.data_variable_size
+        self.noise_dim = self.d
+        '''_______________________
+        '''
+
         # fc1: variable splitting for l1
-        self.fc1_pos = nn.Linear(d, d * dims[1], bias=bias)
+        self.fc1_pos = nn.Linear(d, d * dims[1], bias=bias) # W.size() = [10x100]?
         self.fc1_neg = nn.Linear(d, d * dims[1], bias=bias)
         self.fc1_pos.weight.bounds = self._bounds()
         self.fc1_neg.weight.bounds = self._bounds()
+        
         # fc2: local linear layers
         layers = []
-        for l in range(len(dims) - 2):
-            layers.append(LocallyConnected(d, dims[l + 1], dims[l + 2], bias=bias))
+        for l in range(self.d): # for each output variable,
+            # construct a local linear layer matched to its dim
+            ### we need to concatenate noise at each local layer, so input_ftrs = d+1
+            layers.append(LocallyConnected(input_features=self.d+self.noise_dim, output_features=self.var_out_ftrs[l], bias=bias))
         self.fc2 = nn.ModuleList(layers)
+        # list of 10 linear layers  
 
     def _bounds(self):
         d = self.dims[0]
@@ -126,11 +174,29 @@ class Generator(nn.Module):
                     bounds.append(bound)
         return bounds
 
-    def forward(self, x):  # [n, d] -> [n, d]
+    def forward(self, data):  # [n, d] -> [n, d]
+        
+        discrete_vars, cont_vars = data['discrete'], data['continuous']
+        
+        ''' map discrete variables through embedding then linear layer '''
+        d1 = discrete_vars[0]
+        d1 = self.linear1(self.embed1(d1)) 
+        # variable is now 1-dim real --> concatenate
+
+        d2 = discrete_vars[1]
+        d2 = self.linear2(self.embed2(d2)) 
+        # variable is also now 1-dim real --> concatenate
+
+        # concatenate all variables (each 1-dim)
+        x = torch.cat((d1, d2, cont_vars), dim=1)
+
         x = self.fc1_pos(x) - self.fc1_neg(x)  # [n, d * m1]
         x = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
         for fc in self.fc2:
-            x = torch.sigmoid(x)  # [n, d, m1]
+            x = torch.sigmoid(x)  # [n, d, m1] 
+            # is this an activation function?
+            z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.noise_dim)))).double().cuda()
+            x = torch.cat((x, z),dim=1)
             x = fc(x)  # [n, d, m2]
         x = x.squeeze(dim=2)  # [n, d]
         return x
@@ -188,17 +254,17 @@ class LocallyConnected(nn.Module):
         bias: [d, m2]
     """
 
-    def __init__(self, num_linear, input_features, output_features, bias=True):
+    # def __init__(self, num_linear, input_features, output_features, bias=True):
+    def __init__(self, input_features, output_features, bias=True):
         super(LocallyConnected, self).__init__()
-        self.num_linear = num_linear
+        # self.num_linear = num_linear # dont need this, since we construct 1 at a time now
         self.input_features = input_features
         self.output_features = output_features
 
-        self.weight = nn.Parameter(torch.Tensor(num_linear,
-                                                input_features,
+        self.weight = nn.Parameter(torch.Tensor(input_features,
                                                 output_features))
         if bias:
-            self.bias = nn.Parameter(torch.Tensor(num_linear, output_features))
+            self.bias = nn.Parameter(torch.Tensor(output_features))
         else:
             # You should always register all possible parameters, but the
             # optional ones can be None if you want.
@@ -285,10 +351,19 @@ class AAE_WGAN_GP(nn.Module):
         self.lr_decay = args.lr_decay
         self.gamma = args.gamma
         self.negative_slope = args.negative_slope
-        
+
     def forward(self, inputs):
-        z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.data_variable_size)))).double().to(self.device)
-        fake_data = self.generator(z)
+        ''' in this case, inputs are X; noise (z) comes in at each local layer.
+            But, X contains mixed data. In its current form, X will have 
+            already been processed so that integer labels are assigned to each
+            discrete variable. 
+            Before entering fc1 of generator, these integers need to be 
+            transformed into continuous repres. (via embed+linear).
+        '''
+        # z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.data_variable_size)))).double().to(self.device)
+        
+        fake_data = self.generator(inputs)
+
         return fake_data
         #en_outputs, logits, new_adjA, Wa = self.encoder(inputs)
         #mat_z, de_outputs = self.decoder(logits, new_adjA, Wa)
