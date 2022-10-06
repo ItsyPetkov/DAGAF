@@ -110,7 +110,7 @@ class Generator(nn.Module):
         # fc2: local linear layers
         layers = []
         for l in range(len(dims) - 2):
-            layers.append(LocallyConnected(d, dims[l + 1], dims[l + 2], bias=bias))
+            layers.append(LocallyConnected(d, dims[l + 1]+1, dims[l + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
 
     def _bounds(self):
@@ -131,6 +131,8 @@ class Generator(nn.Module):
         x = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
         for fc in self.fc2:
             x = torch.sigmoid(x)  # [n, d, m1]
+            z = Variable(torch.FloatTensor(np.random.normal(0, 1, (100, 10, 1)))).double().cuda()
+            x = torch.cat((x,z), dim=2)
             x = fc(x)  # [n, d, m2]
         x = x.squeeze(dim=2)  # [n, d]
         return x
@@ -287,8 +289,8 @@ class AAE_WGAN_GP(nn.Module):
         self.negative_slope = args.negative_slope
         
     def forward(self, inputs):
-        z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.data_variable_size)))).double().to(self.device)
-        fake_data = self.generator(z)
+        #z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.data_variable_size)))).double().to(self.device)
+        fake_data = self.generator(inputs.squeeze())
         return fake_data
         #en_outputs, logits, new_adjA, Wa = self.encoder(inputs)
         #mat_z, de_outputs = self.decoder(logits, new_adjA, Wa)
@@ -426,13 +428,18 @@ class AAE_WGAN_GP(nn.Module):
             
             fake_data = self(data)
             
-            y_fake = self.discriminator(fake_data) #cloning is absolutely necessary here
+            y_fake = self.discriminator(fake_data) 
             
             loss_g = -torch.mean(y_fake)
             
             h_A = self.generator.h_func()
             
+            l2_reg = 0.5 * 0.0 * self.generator.l2_reg()
+            l1_reg = 0.0 * self.generator.fc1_l1_reg()
+            
             loss_g += lambda_A * h_A + 0.5 * c_A * h_A * h_A 
+            
+            loss_g += l2_reg + l1_reg
             
             loss_g.backward()
             loss_g = optimizerG.step() 
