@@ -112,6 +112,16 @@ class Generator(nn.Module):
         for l in range(len(dims) - 2):
             layers.append(LocallyConnected(d, dims[l + 1]+1, dims[l + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
+        self.init_weights()
+        
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, Linear):
+                nn.init.xavier_normal_(m.weight.data)
+                m.bias.data.fill_(0.0)
+            elif isinstance(m, BatchNorm1d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
 
     def _bounds(self):
         d = self.dims[0]
@@ -641,25 +651,16 @@ class AAE_WGAN_GP(nn.Module):
     
     def save_model(self):
         assert self.save_directory != '', 'Saving directory not specified! Please specify a saving directory!'
-        torch.save(self.encoder.state_dict(), os.path.join(self.save_directory,'encoder.pth'))
-        torch.save(self.decoder.state_dict(), os.path.join(self.save_directory,'decoder.pth'))
+        torch.save(self.generator.state_dict(), os.path.join(self.save_directory,'generator.pth'))
         torch.save(self.discriminator.state_dict(), os.path.join(self.save_directory,'discriminator.pth'))
         
     def load_model(self):
         assert self.load_directory != '', 'Loading directory not specified! Please specify a loading directory!'
         
-        encoder = MLPEncoder(self.x_dims, self.encoder_hidden, int(self.z_dims), self.adj_A,
-                                  self.device, self.data_type).double().to(self.device)
-            
-        decoder = MLPDecoder(self.z_dims, self.x_dims, self.decoder_hidden,
-                                  self.device, self.data_type).double().to(self.device)
-            
+        generator = Generator(dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
         discriminator = Discriminator(self.data_variable_size, (256, 256)).double().to(self.device)
-            
-            
-        encoder.load_state_dict(torch.load(os.path.join(self.load_directory,'encoder.pth')))
-        decoder.load_state_dict(torch.load(os.path.join(self.load_directory,'decoder.pth')))
+             
+        generator.load_state_dict(torch.load(os.path.join(self.load_directory,'generator.pth')))
         discriminator.load_state_dict(torch.load(os.path.join(self.load_directory,'discriminator.pth')))
-            
-            
-        return encoder, decoder, discriminator
+             
+        return generator, discriminator

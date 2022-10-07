@@ -98,7 +98,7 @@ parser.add_argument('--c_A',  type = float, default= 1,
                     help='coefficient for absolute value h(A).')
 parser.add_argument('--negative_slope', type=float, default=0.2,
                     help='negative_slope for leaky_relu')
-parser.add_argument('--dropout_rate', type=float, default=0.5,
+parser.add_argument('--dropout_rate', type=float, default=0.0,
                     help='rate for discriminator dropout')
 parser.add_argument('--noise', type=float, default=0.5,
                     help='amount of noise for the ANM')
@@ -119,10 +119,10 @@ parser.add_argument('--decoder-hidden', type=int, default=64,
                     help='Number of hidden units.')
 parser.add_argument('--k_max_iter', type = int, default = 1e2,
                     help ='the max iteration number for searching lambda and c')
-parser.add_argument('--beta', default=10, type=int,
-                    help='beta multiplier for the KLD')
-parser.add_argument('--alpha', default=10, type=int,
-                    help='alpha multiplier for the MMD')
+parser.add_argument('--mul1', default=0.01, type=float,
+                    help='multiplier for the L1_Loss')
+parser.add_argument('--mul2', default=0.01, type=float,
+                    help='multiplier for the L2_Loss')
 
 parser.add_argument('--suffix', type=str, default='_springs5',
                     help='Suffix for training data (e.g. "_charged".')
