@@ -40,15 +40,15 @@ from Utils import count_accuracy
     
 class Discriminator(nn.Module):
     """Discriminator module."""
-    def __init__(self, input_dim, discriminator_dim, negative_slope, pac=10):
+    def __init__(self, input_dim, discriminator_dim, negative_slope, dropout_rate, pac=10):
         super(Discriminator, self).__init__()
         dim = input_dim * pac
         self.pac = pac
         self.pacdim = dim
-        self.negative_slope = negative_slope
+        
         seq = []
         for item in list(discriminator_dim):
-            seq += [Linear(dim, item), LeakyReLU(self.negative_slope), Dropout(0.5)]
+            seq += [Linear(dim, item), LeakyReLU(negative_slope), Dropout(dropout_rate)]
             dim = item
 
         seq += [Linear(dim, 1)]
@@ -294,17 +294,17 @@ class AAE_WGAN_GP(nn.Module):
         self.discrete_columns = args.discrete_column_names_list
         self.data_variable_size = self.adj_A.shape[1]
         
+        self.mul1 = args.mul1
+        self.mul2 = args.mul2
+        
         self.lr_decay = args.lr_decay
         self.gamma = args.gamma
         self.negative_slope = args.negative_slope
+        self.dropout_rate = args.dropout_rate
         
     def forward(self, inputs):
-        #z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.batch_size, self.data_variable_size)))).double().to(self.device)
         fake_data = self.generator(inputs.squeeze())
         return fake_data
-        #en_outputs, logits, new_adjA, Wa = self.encoder(inputs)
-        #mat_z, de_outputs = self.decoder(logits, new_adjA, Wa)
-        #return en_outputs, logits, new_adjA, mat_z, de_outputs
                 
     def update_optimizer(self, optimizer, original_lr, c_A):
         '''related LR to c_A, whenever c_A gets big, reduce LR proportionally'''
@@ -324,35 +324,6 @@ class AAE_WGAN_GP(nn.Module):
             parame_group['lr'] = lr
 
         return optimizer, lr
-        
-    def vae_loss(self, data, de_outputs, logits, origin_A, tau_A, data_variable_size, lambda_A, c_A, device):
-        
-        target = data
-        preds = de_outputs
-        variance = 0.
-        
-        # reconstruction accuracy loss
-        if self.data_type == 'benchmark':
-            loss_nll = nll_catogrical(preds, target)
-        else:   
-            loss_nll = nll_gaussian(preds, target, variance)
-
-        # KL loss
-        loss_kl = kl_gaussian_sem(logits)
-
-        # ELBO loss:
-        loss = loss_kl + loss_nll
-
-        # add A loss
-        one_adj_A = origin_A 
-        sparse_loss = tau_A * torch.sum(torch.abs(one_adj_A))
-
-        # compute h(A)
-        h_A = _h_A(origin_A, data_variable_size, device)
-        
-        loss += lambda_A * h_A + 0.5 * c_A * h_A * h_A + 100. * torch.trace(origin_A*origin_A) + sparse_loss
-        
-        return loss, preds, target, loss_nll, loss_kl 
     
     def train(self, train_loader, epoch, best_val_loss, ground_truth_G, lambda_A, c_A, optimizerG, optimizerD):
         '''training algorithm for a single epoch'''
@@ -403,35 +374,8 @@ class AAE_WGAN_GP(nn.Module):
                 loss_d.backward()
                 loss_d = optimizerD.step() 
             
-            # ###################################################
-            # # (2) Update G network which is the decoder of VAE
-            # ###################################################
-            
-            # data, relations = Variable(data.to(self.device)).double(), Variable(relations.to(self.device)).double()
-            
-            # optimizerV.zero_grad()
-            
-            # en_outputs, logits, origin_A, mat_z, de_outputs = self(data)
-            
-            # loss, preds, target, loss_nll, loss_kl = self.vae_loss(data, de_outputs, logits, origin_A, self.tau_A, self.data_variable_size, lambda_A, c_A, self.device)
-
-            # loss.backward(retain_graph=True)
-            # loss = optimizerV.step()
-            
-            # # compute metrics
-            # graph = origin_A.data.clone().cpu().numpy()
-            # graph[np.abs(graph) < self.graph_threshold] = 0
-            
-            # if ground_truth_G != None:
-            #     fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
-            #     shd_trian.append(shd)
-                
-            # mse_train.append(F.mse_loss(preds, target).item())
-            # nll_train.append(loss_nll.item())
-            # kl_train.append(loss_kl.item())
-            
             ###############################################
-            # (3) Update G network: maximize log(D(G(z)))
+            # (2) Update G network: maximize log(D(G(z)))
             ###############################################
 
             optimizerG.zero_grad()
@@ -444,8 +388,8 @@ class AAE_WGAN_GP(nn.Module):
             
             h_A = self.generator.h_func()
             
-            l2_reg = 0.5 * 0.0 * self.generator.l2_reg()
-            l1_reg = 0.0 * self.generator.fc1_l1_reg()
+            l2_reg = 0.5 * self.mul2 * self.generator.l2_reg()
+            l1_reg = self.mul1 * self.generator.fc1_l1_reg()
             
             loss_g += lambda_A * h_A + 0.5 * c_A * h_A * h_A 
             
@@ -455,13 +399,14 @@ class AAE_WGAN_GP(nn.Module):
             loss_g = optimizerG.step() 
             
             # compute metrics
-            #graph = origin_A.data.clone().cpu().numpy()
             graph = self.generator.fc1_to_adj()
             graph[np.abs(graph) < self.graph_threshold] = 0
             
             if ground_truth_G != None:
                 fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
                 shd_trian.append(shd)
+                
+            mse_train.append(F.mse_loss(fake_data, data.squeeze()).item())
             
         if ground_truth_G != None:
             
@@ -489,7 +434,7 @@ class AAE_WGAN_GP(nn.Module):
     def fit(self, train_loader, ground_truth_G = None):
         
         if not hasattr(self, "discriminator"):
-            self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope).double().to(self.device)
+            self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate).double().to(self.device)
             
         if not hasattr(self, "generator"):
             self.generator = Generator(dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
@@ -518,9 +463,6 @@ class AAE_WGAN_GP(nn.Module):
             for step_k in range(self.k_max_iter):
                 while self.c_A < 1e+20:
                     for epoch in range(self.epochs):
-                        #ELBO_loss, NLL_loss, MSE_loss, graph, origin_A = self.train(train_loader,
-                        #epoch, best_ELBO_loss, ground_truth_G, 
-                        #self.lambda_A, self.c_A, self.optimizerV, self.optimizerD)
                         ELBO_loss, NLL_loss, MSE_loss, graph = self.train(train_loader,
                         epoch, best_ELBO_loss, ground_truth_G, 
                         self.lambda_A, self.c_A, self.optimizerG, self.optimizerD)
@@ -545,13 +487,7 @@ class AAE_WGAN_GP(nn.Module):
                     if ELBO_loss > 2 * best_ELBO_loss:
                         break
 
-                    # # update parameters
-                    # A_new = origin_A.data.clone()
-                    # self.h_A_new = _h_A(A_new, self.data_variable_size, self.device)
-                    # if self.h_A_new.item() > 0.25 * self.h_A_old:
-                    #     self.c_A*=10
-                    # else:
-                    #     break
+                    # update parameters
                     with torch.no_grad():
                         self.h_A_new = self.generator.h_func().item()
                     if self.h_A_new > 0.25 * self.h_A_old:
@@ -561,13 +497,8 @@ class AAE_WGAN_GP(nn.Module):
 
                 # update parameters
                 # h_A, adj_A are computed in loss anyway, so no need to store
-                #self.h_A_old = self.h_A_new.item()
-                #self.lambda_A += self.c_A * self.h_A_new.item()
                 self.h_A_old = self.h_A_new
                 self.lambda_A += self.c_A * self.h_A_new
-
-                # if self.h_A_new.item() <= self.h_tol:
-                #     break
                 
                 if self.h_A_new <= self.h_tol:
                      break
@@ -589,7 +520,6 @@ class AAE_WGAN_GP(nn.Module):
                 fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_MSE_graph))
                 print('Best MSE Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-                #graph = origin_A.data.clone().cpu().numpy()
                 graph = self.generator.fc1_to_adj()
                 graph[np.abs(graph) < 0.1] = 0
                 # print(graph)
@@ -606,11 +536,8 @@ class AAE_WGAN_GP(nn.Module):
                 fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
                 print('threshold 0.3, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
                 
-                #graph = origin_A.data.clone().cpu().numpy()
-                #graph[np.abs(graph) < self.graph_threshold] = 0
                 return graph
             else:
-                #graph = origin_A.data.clone().cpu().numpy()
                 graph = self.generator.fc1_to_adj()
                 graph[np.abs(graph) < self.graph_threshold] = 0
                 return graph
@@ -632,7 +559,6 @@ class AAE_WGAN_GP(nn.Module):
             fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_MSE_graph))
             print('Best MSE Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
-            #graph = origin_A.data.clone().cpu().numpy()
             graph = self.generator.fc1_to_adj()
             graph[np.abs(graph) < 0.1] = 0
             # print(graph)
@@ -658,7 +584,7 @@ class AAE_WGAN_GP(nn.Module):
         assert self.load_directory != '', 'Loading directory not specified! Please specify a loading directory!'
         
         generator = Generator(dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
-        discriminator = Discriminator(self.data_variable_size, (256, 256)).double().to(self.device)
+        discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate).double().to(self.device)
              
         generator.load_state_dict(torch.load(os.path.join(self.load_directory,'generator.pth')))
         discriminator.load_state_dict(torch.load(os.path.join(self.load_directory,'discriminator.pth')))
