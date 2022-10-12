@@ -96,7 +96,7 @@ class Discriminator(nn.Module):
     
 class Generator(nn.Module):
     """Generator module (based on DAG-NotearsMLP)"""
-    def __init__(self, dims, bias=True):
+    def __init__(self, m, dims, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
@@ -110,7 +110,7 @@ class Generator(nn.Module):
         # fc2: local linear layers
         layers = []
         for l in range(len(dims) - 2):
-            layers.append(LocallyConnected(d, dims[l + 1]+1, dims[l + 2], bias=bias))
+            layers.append(LocallyConnected(d, dims[l + 1]+m, dims[l + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
         self.init_weights()
         
@@ -136,12 +136,12 @@ class Generator(nn.Module):
                     bounds.append(bound)
         return bounds
 
-    def forward(self, x):  # [n, d] -> [n, d]
+    def forward(self, x, n, d, m):  # [n, d] -> [n, d]
         x = self.fc1_pos(x) - self.fc1_neg(x)  # [n, d * m1]
         x = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
         for fc in self.fc2:
             x = torch.sigmoid(x)  # [n, d, m1]
-            z = Variable(torch.FloatTensor(np.random.normal(0, 1, (100, 10, 1)))).double().cuda()
+            z = Variable(torch.FloatTensor(np.random.normal(0, 1, (n, d, m)))).double().cuda()
             x = torch.cat((x,z), dim=2)
             x = fc(x)  # [n, d, m2]
         x = x.squeeze(dim=2)  # [n, d]
@@ -303,7 +303,7 @@ class AAE_WGAN_GP(nn.Module):
         self.dropout_rate = args.dropout_rate
         
     def forward(self, inputs):
-        fake_data = self.generator(inputs.squeeze())
+        fake_data = self.generator(inputs.squeeze(), self.batch_size, self.data_variable_size, self.z_dims)
         return fake_data
                 
     def update_optimizer(self, optimizer, original_lr, c_A):
@@ -384,7 +384,7 @@ class AAE_WGAN_GP(nn.Module):
             
             y_fake = self.discriminator(fake_data) 
             
-            loss_g = -torch.mean(y_fake)
+            loss_g = -torch.mean(F.softplus(y_fake))
             
             h_A = self.generator.h_func()
             
@@ -407,6 +407,8 @@ class AAE_WGAN_GP(nn.Module):
                 shd_trian.append(shd)
                 
             mse_train.append(F.mse_loss(fake_data, data.squeeze()).item())
+            #nll_train.append(loss_g.item())
+            #kl_train.append(loss_d.item())
             
         if ground_truth_G != None:
             
@@ -437,7 +439,7 @@ class AAE_WGAN_GP(nn.Module):
             self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate).double().to(self.device)
             
         if not hasattr(self, "generator"):
-            self.generator = Generator(dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
+            self.generator = Generator(self.z_dims, dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
             
         if not hasattr(self, "optimizerD"):
             self.optimizerD = optim.Adam(self.discriminator.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
@@ -583,7 +585,7 @@ class AAE_WGAN_GP(nn.Module):
     def load_model(self):
         assert self.load_directory != '', 'Loading directory not specified! Please specify a loading directory!'
         
-        generator = Generator(dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
+        generator = Generator(self.z_dims, dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
         discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate).double().to(self.device)
              
         generator.load_state_dict(torch.load(os.path.join(self.load_directory,'generator.pth')))
