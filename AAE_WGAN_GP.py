@@ -51,8 +51,13 @@ class Discriminator(nn.Module):
             seq += [Linear(dim, item), LeakyReLU(negative_slope), Dropout(dropout_rate)]
             dim = item
 
-        seq += [Linear(dim, 1)]
+        #seq += [Linear(dim, 1)]
         self.seq = Sequential(*seq)
+        
+        self.out = Linear(dim, 1)
+        self.mu = Linear(dim, 1)
+        self.std = Linear(dim, 1)
+        
         self.init_weights()
         
     def init_weights(self):
@@ -76,7 +81,7 @@ class Discriminator(nn.Module):
         
         interpolates = alpha * real_data + ((1 - alpha) * fake_data)
 
-        disc_interpolates = self(interpolates)
+        disc_interpolates, _, _ = self(interpolates)
 
         gradients = torch.autograd.grad(
             outputs=disc_interpolates, inputs=interpolates,
@@ -92,7 +97,12 @@ class Discriminator(nn.Module):
 
     def forward(self, input):
         assert input.size()[0] % self.pac == 0
-        return self.seq(input.view(-1, self.pacdim))
+        seq_out = self.seq(input.view(-1, self.pacdim))
+        out = self.out(seq_out)
+        mu = self.mu(seq_out)
+        std = self.std(seq_out)
+        return out, mu, std
+        #return self.seq(input.view(-1, self.pacdim))
     
 class Generator(nn.Module):
     """Generator module (based on DAG-NotearsMLP)"""
@@ -355,9 +365,9 @@ class AAE_WGAN_GP(nn.Module):
                 
                 fake_data = self(data)
                 
-                y_fake = self.discriminator(fake_data)
+                y_fake, _, _ = self.discriminator(fake_data)
             
-                y_real = self.discriminator(data)
+                y_real, _, _ = self.discriminator(data)
                 
                 if self.x_dims > 1:
                     #vector case
@@ -382,7 +392,8 @@ class AAE_WGAN_GP(nn.Module):
             
             fake_data = self(data)
             
-            y_fake = self.discriminator(fake_data) 
+            y_fake, mu_fake, std_fake = self.discriminator(fake_data) 
+            _, mu_real, std_real = self.discriminator(data)
             
             loss_g = -torch.mean(F.softplus(y_fake))
             
@@ -395,8 +406,15 @@ class AAE_WGAN_GP(nn.Module):
             
             loss_g += l2_reg + l1_reg
             
-            loss_g.backward()
-            loss_g = optimizerG.step() 
+            loss_g.backward(retain_graph=True)
+            
+            loss_mean = torch.mean(F.softplus(mu_fake)) - torch.mean(F.softplus(mu_real))
+            loss_std = torch.std(F.softplus(std_fake)) - torch.std(F.softplus(std_real))
+            loss_info = loss_mean + loss_std 
+            
+            loss_info.backward() 
+            optimizerG.step()
+            #loss_g = optimizerG.step() 
             
             # compute metrics
             graph = self.generator.fc1_to_adj()
