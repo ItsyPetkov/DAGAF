@@ -69,7 +69,7 @@ class Discriminator(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-    def calc_gradient_penalty(self, real_data, fake_data, data_type, device='cpu', pac=10, lambda_=10):
+    def calc_gradient_penalty(self, real_data, fake_data, device='cpu', pac=10, lambda_=10):
         
         # reshape data
         real_data = real_data.squeeze()
@@ -338,13 +338,12 @@ class AAE_WGAN_GP(nn.Module):
     def train(self, train_loader, epoch, best_val_loss, ground_truth_G, lambda_A, c_A, optimizerG, optimizerD):
         '''training algorithm for a single epoch'''
         t = time.time()
-        nll_train = []
-        kl_train = []
+        D_loss = []
+        G_loss = []
+        Pen_loss = []
+        Info_loss = []
         mse_train = []
         shd_trian = []
-
-        self.schedulerG.step()
-        self.schedulerD.step()
 
         # update optimizer
         optimizerG, lr = self.update_optimizer(optimizerG, self.lr, c_A)
@@ -372,15 +371,18 @@ class AAE_WGAN_GP(nn.Module):
                 if self.x_dims > 1:
                     #vector case
                     pen = self.discriminator.calc_gradient_penalty(
-                        data.view(-1, data.size(1) * data.size(2)), fake_data.view(-1, fake_data.size(1) * fake_data.size(2)), self.data_type, self.device) 
+                        data.view(-1, data.size(1) * data.size(2)), fake_data.view(-1, fake_data.size(1) * fake_data.size(2)), self.device) 
                     loss_d = -(torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake)))
                 else:
                     #normal continious and discrete data case
                     pen = self.discriminator.calc_gradient_penalty(
-                            data, fake_data, self.data_type, self.device) 
+                            data, fake_data, self.device) 
                     loss_d = -(torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake)))
-                    
+                
+                Pen_loss.append(pen.item())    
                 pen.backward(retain_graph=True)
+                
+                D_loss.append(loss_d.item())
                 loss_d.backward()
                 loss_d = optimizerD.step() 
             
@@ -406,15 +408,19 @@ class AAE_WGAN_GP(nn.Module):
             
             loss_g += l2_reg + l1_reg
             
+            G_loss.append(loss_g.item())
             loss_g.backward(retain_graph=True)
             
             loss_mean = torch.mean(F.softplus(mu_fake)) - torch.mean(F.softplus(mu_real))
             loss_std = torch.std(F.softplus(std_fake)) - torch.std(F.softplus(std_real))
             loss_info = loss_mean + loss_std 
             
+            Info_loss.append(loss_info.item())
             loss_info.backward() 
             optimizerG.step()
-            #loss_g = optimizerG.step() 
+            
+            self.schedulerG.step()
+            self.schedulerD.step()
             
             # compute metrics
             graph = self.generator.fc1_to_adj()
@@ -425,30 +431,30 @@ class AAE_WGAN_GP(nn.Module):
                 shd_trian.append(shd)
                 
             mse_train.append(F.mse_loss(fake_data, data.squeeze()).item())
-            #nll_train.append(loss_g.item())
-            #kl_train.append(loss_d.item())
             
         if ground_truth_G != None:
             
             print('Epoch: {:04d}'.format(epoch),
-                  'nll_train: {:.10f}'.format(np.mean(nll_train)),
-                  'kl_train: {:.10f}'.format(np.mean(kl_train)),
-                  'ELBO_loss: {:.10f}'.format(np.mean(kl_train)  + np.mean(nll_train)),
+                  'D_loss: {:.10f}'.format(np.mean(D_loss)),
+                  'G_loss: {:.10f}'.format(np.mean(G_loss)),
+                  'Pen_loss: {:.10f}'.format(np.mean(Pen_loss)),
+                  'Info_loss: {:.10f}'.format(np.mean(Info_loss)),
                   'mse_train: {:.10f}'.format(np.mean(mse_train)),
                   'shd_trian: {:.10f}'.format(np.mean(shd_trian)),
                   'time: {:.4f}s'.format(time.time() - t))
 
-            return np.mean(np.mean(kl_train)  + np.mean(nll_train)), np.mean(nll_train), np.mean(mse_train), graph#, origin_A
+            return np.mean(D_loss), np.mean(G_loss), np.mean(Pen_loss), np.mean(Info_loss), np.mean(mse_train), graph#, origin_A
         else:
             
             print('Epoch: {:04d}'.format(epoch),
-                  'nll_train: {:.10f}'.format(np.mean(nll_train)),
-                  'kl_train: {:.10f}'.format(np.mean(kl_train)),
-                  'ELBO_loss: {:.10f}'.format(np.mean(kl_train)  + np.mean(nll_train)),
+                  'D_loss: {:.10f}'.format(np.mean(D_loss)),
+                  'G_loss: {:.10f}'.format(np.mean(G_loss)),
+                  'Pen_loss: {:.10f}'.format(np.mean(Pen_loss)),
+                  'Info_loss: {:.10f}'.format(np.mean(Info_loss)),
                   'mse_train: {:.10f}'.format(np.mean(mse_train)),
                   'time: {:.4f}s'.format(time.time() - t))
             
-            return np.mean(np.mean(kl_train)  + np.mean(nll_train)), np.mean(nll_train), np.mean(mse_train), graph#, origin_A
+            return np.mean(D_loss), np.mean(G_loss), np.mean(Pen_loss), np.mean(Info_loss), np.mean(mse_train), graph#, origin_A
         
     
     def fit(self, train_loader, ground_truth_G = None):
@@ -483,29 +489,12 @@ class AAE_WGAN_GP(nn.Module):
             for step_k in range(self.k_max_iter):
                 while self.c_A < 1e+20:
                     for epoch in range(self.epochs):
-                        ELBO_loss, NLL_loss, MSE_loss, graph = self.train(train_loader,
+                        D_loss, G_loss, Pen_loss, Info_loss, MSE_loss, graph = self.train(train_loader,
                         epoch, best_ELBO_loss, ground_truth_G, 
                         self.lambda_A, self.c_A, self.optimizerG, self.optimizerD)
-                        if ELBO_loss < best_ELBO_loss:
-                            best_ELBO_loss = ELBO_loss
-                            best_epoch = epoch
-                            best_ELBO_graph = graph
-
-                        if NLL_loss < best_NLL_loss:
-                            best_NLL_loss = NLL_loss
-                            best_epoch = epoch
-                            best_NLL_graph = graph
-
-                        if MSE_loss < best_MSE_loss:
-                            best_MSE_loss = MSE_loss
-                            best_epoch = epoch
-                            best_MSE_graph = graph
-
+                        
                     print("Optimization Finished!")
                     print("Best Epoch: {:04d}".format(best_epoch))
-                
-                    if ELBO_loss > 2 * best_ELBO_loss:
-                        break
 
                     # update parameters
                     with torch.no_grad():
@@ -524,21 +513,6 @@ class AAE_WGAN_GP(nn.Module):
                      break
                 
             if ground_truth_G != None:
-                # test()
-                #print (best_ELBO_graph)
-                #print(nx.to_numpy_array(ground_truth_G))
-                fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_ELBO_graph))
-                print('Best ELBO Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
-
-                #print(best_NLL_graph)
-                #print(nx.to_numpy_array(ground_truth_G))
-                fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_NLL_graph))
-                print('Best NLL Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
-
-                #print (best_MSE_graph)
-                #print(nx.to_numpy_array(ground_truth_G))
-                fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(best_MSE_graph))
-                print('Best MSE Graph Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
 
                 graph = self.generator.fc1_to_adj()
                 graph[np.abs(graph) < 0.1] = 0

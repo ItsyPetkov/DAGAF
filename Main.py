@@ -28,12 +28,10 @@ import pickle
 import numpy as np
 import networkx as nx
 import pandas as pd 
-from FullDataPreProcessor import FullDataPreProcessor
 from AAE_WGAN_GP import AAE_WGAN_GP
 from Utils import load_data
 from Utils import draw_dag
 from Utils import compute_BiCScore
-from Utils import pns_
 from argparse import ArgumentParser
 
 #Adding a lot of args here
@@ -100,7 +98,7 @@ parser.add_argument('--negative_slope', type=float, default=0.2,
                     help='negative_slope for leaky_relu')
 parser.add_argument('--dropout_rate', type=float, default=0.0,
                     help='rate for discriminator dropout')
-parser.add_argument('--noise', type=float, default=0.5,
+parser.add_argument('--noise', type=float, default=1e-20,
                     help='amount of noise for the ANM')
 
 
@@ -199,10 +197,6 @@ def main():
         # add adjacency matrix A
         num_nodes = args.data_variable_size
         adj_A = np.zeros((num_nodes, num_nodes))
-        
-        #test = pns_(adj_A, train_data, num_nodes, 0.75)
-        #print(test)
-        #print(test.shape)
     
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
         causal_graph = aae_wgan_gp.fit(train_data, ground_truth)

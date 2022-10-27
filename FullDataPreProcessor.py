@@ -57,25 +57,29 @@ class FullDataPreProcessor:
         return df
     
     def sample_dataframe(self, dataframe): 
+        
+        #This part samples column-wise
         if self.column_names != []:
             dataframes = []
-            #assert self.initial_identifier != '', 'Initial Identifier not specified! Choose one of the following: ' + str(list(dataframe.columns))
-            #initial_df = pd.DataFrame({self.initial_identifier: dataframe[self.initial_identifier]})
-            #dataframes.append(initial_df)
+            assert self.initial_identifier != '', 'Initial Identifier not specified! Choose one of the following: ' + str(list(dataframe.columns))
+            initial_df = pd.DataFrame({self.initial_identifier: dataframe[self.initial_identifier]})
+            dataframes.append(initial_df)
             for column in self.column_names:
                 tmpdf = pd.DataFrame({column: dataframe[column]})
                 dataframes.append(tmpdf)
             new_df = pd.concat(dataframes, axis=1)
-            if self.num_of_rows != -1:
-                assert self.num_of_rows > 0, 'Number of rows must be greater than zero'
-                assert self.num_of_rows <= dataframe.shape[0], 'Number of rows must less or equal to the total number of rows'
-                sampled_df = new_df.sample(self.num_of_rows, random_state=self.seed)
-                sampled_df.sort_index(inplace=True)
-                return sampled_df
-            else:
-                return new_df
         else:
-            return dataframe
+            new_df = dataframe
+        
+        #This part samples row-wise
+        if self.num_of_rows != -1:
+            assert self.num_of_rows > 0, 'Number of rows must be greater than zero'
+            assert self.num_of_rows <= dataframe.shape[0], 'Number of rows must less or equal to the total number of rows'
+            sampled_df = new_df.sample(self.num_of_rows, random_state=self.seed)
+            sampled_df.sort_index(inplace=True)
+            return sampled_df
+        else:
+            return new_df
     
 class Dataset:
     def __init__(self, data, transform=None):
