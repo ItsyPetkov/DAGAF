@@ -36,8 +36,8 @@ from torch.nn import Linear, Sequential, LeakyReLU, Dropout, BatchNorm1d
 from Utils import preprocess_adj_new, preprocess_adj_new1
 from Utils import nll_gaussian, kl_gaussian_sem,  nll_catogrical
 from Utils import _h_A
-from Utils import count_accuracy  
-    
+from Utils import count_accuracy
+
 class Discriminator(nn.Module):
     """Discriminator module."""
     def __init__(self, input_dim, discriminator_dim, negative_slope, dropout_rate, pac=10):
@@ -45,21 +45,22 @@ class Discriminator(nn.Module):
         dim = input_dim * pac
         self.pac = pac
         self.pacdim = dim
-        
+
         seq = []
         for item in list(discriminator_dim):
             seq += [Linear(dim, item), LeakyReLU(negative_slope), Dropout(dropout_rate)]
             dim = item
 
-        #seq += [Linear(dim, 1)]
+        seq += [Linear(dim, 1)]
         self.seq = Sequential(*seq)
-        
-        self.out = Linear(dim, 1)
-        self.mu = Linear(dim, 1)
-        self.std = Linear(dim, 1)
-        
+
+        #self.output_layer = Linear(dim, 1)
+        #self.mu = Linear(dim, 1)
+        #self.std = Linear(dim, 1)
+        #self.latent_layer = Linear(dim, 1)
+
         self.init_weights()
-        
+
     def init_weights(self):
         for m in self.modules():
             if isinstance(m, Linear):
@@ -70,18 +71,18 @@ class Discriminator(nn.Module):
                 m.bias.data.zero_()
 
     def calc_gradient_penalty(self, real_data, fake_data, device='cpu', pac=10, lambda_=10):
-        
+
         # reshape data
         real_data = real_data.squeeze()
         fake_data = fake_data.squeeze()
-        
+
         alpha = torch.rand(real_data.size(0) // pac, 1, 1, device=device)
         alpha = alpha.repeat(1, pac, real_data.size(1))
         alpha = alpha.view(-1, real_data.size(1))
-        
+
         interpolates = alpha * real_data + ((1 - alpha) * fake_data)
 
-        disc_interpolates, _, _ = self(interpolates)
+        disc_interpolates = self(interpolates)
 
         gradients = torch.autograd.grad(
             outputs=disc_interpolates, inputs=interpolates,
@@ -97,16 +98,17 @@ class Discriminator(nn.Module):
 
     def forward(self, input):
         assert input.size()[0] % self.pac == 0
-        seq_out = self.seq(input.view(-1, self.pacdim))
-        out = self.out(seq_out)
-        mu = self.mu(seq_out)
-        std = self.std(seq_out)
-        return out, mu, std
-        #return self.seq(input.view(-1, self.pacdim))
-    
+        #seq_out = self.seq(input.view(-1, self.pacdim))
+        #output = self.output_layer(seq_out)
+        #latent_code = self.latent_layer(seq_out)
+        #mu = self.mu(seq_out)
+        #std = self.std(seq_out)
+        #return output, mu, std
+        return self.seq(input.view(-1, self.pacdim))
+
 class Generator(nn.Module):
     """Generator module (based on DAG-NotearsMLP)"""
-    def __init__(self, m, dims, bias=True):
+    def __init__(self, m, k, dims, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
@@ -123,7 +125,7 @@ class Generator(nn.Module):
             layers.append(LocallyConnected(d, dims[l + 1]+m, dims[l + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
         self.init_weights()
-        
+
     def init_weights(self):
         for m in self.modules():
             if isinstance(m, Linear):
@@ -146,13 +148,15 @@ class Generator(nn.Module):
                     bounds.append(bound)
         return bounds
 
-    def forward(self, x, n, d, m):  # [n, d] -> [n, d]
+    def forward(self, x, n, d, m, k):  # [n, d] -> [n, d]
         x = self.fc1_pos(x) - self.fc1_neg(x)  # [n, d * m1]
         x = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
         for fc in self.fc2:
             x = torch.sigmoid(x)  # [n, d, m1]
             z = Variable(torch.FloatTensor(np.random.normal(0, 1, (n, d, m)))).double().cuda()
+            #c = Variable(torch.FloatTensor(np.random.uniform(-1, 1, (n, d, k)))).double().cuda()
             x = torch.cat((x,z), dim=2)
+            #x = torch.cat((x,c), dim=2)
             x = fc(x)  # [n, d, m2]
         x = x.squeeze(dim=2)  # [n, d]
         return x
@@ -194,7 +198,7 @@ class Generator(nn.Module):
         W = torch.sqrt(A)  # [i, j]
         W = W.cpu().detach().numpy()  # [i, j]
         return W
-    
+
 class LocallyConnected(nn.Module):
     """Local linear layer, i.e. Conv1dLocal() with filter size 1.
     Args:
@@ -270,52 +274,55 @@ class TraceExpm(torch.autograd.Function):
         return grad_input.cuda()
 
 trace_expm = TraceExpm.apply
-    
+
 class AAE_WGAN_GP(nn.Module):
     """DAG-AAE model/framework."""
     def __init__(self, args, adj_A):
         super(AAE_WGAN_GP, self).__init__()
-        
+
         self.data_type = args.data_type
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.batch_size = args.batch_size
-        
+
         self.discriminator_steps = args.discriminator_steps
         self.epochs = args.epochs
         self.lr = args.lr
-        
+
         self.c_A = args.c_A
         self.lambda_A = args.lambda_A
         self.tau_A = args.tau_A
         self.graph_threshold = args.graph_threshold
-        
+
         self.x_dims = args.x_dims
         self.z_dims = args.z_dims
+        self.code_dim = args.code_dim
+
         self.encoder_hidden = args.encoder_hidden
         self.decoder_hidden = args.decoder_hidden
         self.adj_A = adj_A
-        
+
         self.k_max_iter = int(args.k_max_iter)
         self.h_tol = args.h_tol
-        
+
         self.h_A_new = torch.tensor(1.)
         self.h_A_old = np.inf
-        
+
         self.discrete_columns = args.discrete_column_names_list
         self.data_variable_size = self.adj_A.shape[1]
-        
+
         self.mul1 = args.mul1
         self.mul2 = args.mul2
-        
+        self.alpha = args.alpha
+
         self.lr_decay = args.lr_decay
         self.gamma = args.gamma
         self.negative_slope = args.negative_slope
         self.dropout_rate = args.dropout_rate
-        
+
     def forward(self, inputs):
-        fake_data = self.generator(inputs.squeeze(), self.batch_size, self.data_variable_size, self.z_dims)
+        fake_data = self.generator(inputs.squeeze(), self.batch_size, self.data_variable_size, self.z_dims, self.code_dim)
         return fake_data
-                
+
     def update_optimizer(self, optimizer, original_lr, c_A):
         '''related LR to c_A, whenever c_A gets big, reduce LR proportionally'''
         MAX_LR = 1e-2
@@ -334,14 +341,32 @@ class AAE_WGAN_GP(nn.Module):
             parame_group['lr'] = lr
 
         return optimizer, lr
-    
+
+    def compute_kernel(self, x, y):
+        x_size = x.size(0)
+        y_size = y.size(0)
+        dim = x.size(1)
+        x = x.unsqueeze(1) # (x_size, 1, dim)
+        y = y.unsqueeze(0) # (1, y_size, dim)
+        tiled_x = x.expand(x_size, y_size, dim)
+        tiled_y = y.expand(x_size, y_size, dim)
+        kernel_input = (tiled_x - tiled_y).pow(2).mean(2)/float(dim)
+        return torch.exp(-kernel_input) # (x_size, y_size)
+
+    def compute_mmd(self, x, y):
+        x_kernel = self.compute_kernel(x, x)
+        y_kernel = self.compute_kernel(y, y)
+        xy_kernel = self.compute_kernel(x, y)
+        mmd = x_kernel.mean() + y_kernel.mean() - 2*xy_kernel.mean()
+        return ((1 - self.alpha) * mmd)
+
     def train(self, train_loader, epoch, best_val_loss, ground_truth_G, lambda_A, c_A, optimizerG, optimizerD):
         '''training algorithm for a single epoch'''
         t = time.time()
         D_loss = []
         G_loss = []
         Pen_loss = []
-        Info_loss = []
+        MMD_loss = []
         mse_train = []
         shd_trian = []
 
@@ -354,126 +379,123 @@ class AAE_WGAN_GP(nn.Module):
                 ###################################################################
                 # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
                 ###################################################################
-                
+
                 data, relations = Variable(data.to(self.device)).double(), Variable(relations.to(self.device)).double()
-                
+
                 if self.data_type != 'synthetic':
                     data = data.unsqueeze(2)
-                
+
                 optimizerD.zero_grad()
-                
+
                 fake_data = self(data)
-                
-                y_fake, _, _ = self.discriminator(fake_data)
-            
-                y_real, _, _ = self.discriminator(data)
-                
+
+                y_fake = self.discriminator(fake_data)
+
+                y_real = self.discriminator(data)
+
                 if self.x_dims > 1:
                     #vector case
                     pen = self.discriminator.calc_gradient_penalty(
-                        data.view(-1, data.size(1) * data.size(2)), fake_data.view(-1, fake_data.size(1) * fake_data.size(2)), self.device) 
+                        data.view(-1, data.size(1) * data.size(2)), fake_data.view(-1, fake_data.size(1) * fake_data.size(2)), self.device)
                     loss_d = -(torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake)))
                 else:
                     #normal continious and discrete data case
                     pen = self.discriminator.calc_gradient_penalty(
-                            data, fake_data, self.device) 
+                            data, fake_data, self.device)
                     loss_d = -(torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake)))
-                
-                Pen_loss.append(pen.item())    
+
+                Pen_loss.append(pen.item())
                 pen.backward(retain_graph=True)
-                
+
                 D_loss.append(loss_d.item())
                 loss_d.backward()
-                loss_d = optimizerD.step() 
-            
+                loss_d = optimizerD.step()
+
             ###############################################
             # (2) Update G network: maximize log(D(G(z)))
             ###############################################
 
             optimizerG.zero_grad()
-            
+
             fake_data = self(data)
-            
-            y_fake, mu_fake, std_fake = self.discriminator(fake_data) 
-            _, mu_real, std_real = self.discriminator(data)
-            
+
+            y_fake = self.discriminator(fake_data)
+
             loss_g = -torch.mean(F.softplus(y_fake))
-            
+
             h_A = self.generator.h_func()
-            
+
             l2_reg = 0.5 * self.mul2 * self.generator.l2_reg()
             l1_reg = self.mul1 * self.generator.fc1_l1_reg()
-            
-            loss_g += lambda_A * h_A + 0.5 * c_A * h_A * h_A 
-            
+
+            loss_g += lambda_A * h_A + 0.5 * c_A * h_A * h_A
+
             loss_g += l2_reg + l1_reg
-            
+
             G_loss.append(loss_g.item())
             loss_g.backward(retain_graph=True)
+
+            loss_mmd = self.compute_mmd(data.squeeze(), fake_data)
             
-            loss_mean = torch.mean(F.softplus(mu_fake)) - torch.mean(F.softplus(mu_real))
-            loss_std = torch.std(F.softplus(std_fake)) - torch.std(F.softplus(std_real))
-            loss_info = loss_mean + loss_std 
-            
-            Info_loss.append(loss_info.item())
-            loss_info.backward() 
+            MMD_loss.append(loss_mmd.item())
+            loss_mmd.backward()
             optimizerG.step()
-            
+
             self.schedulerG.step()
             self.schedulerD.step()
-            
+
             # compute metrics
             graph = self.generator.fc1_to_adj()
             graph[np.abs(graph) < self.graph_threshold] = 0
-            
+
             if ground_truth_G != None:
                 fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
                 shd_trian.append(shd)
-                
+
             mse_train.append(F.mse_loss(fake_data, data.squeeze()).item())
-            
+
         if ground_truth_G != None:
-            
+
             print('Epoch: {:04d}'.format(epoch),
                   'D_loss: {:.10f}'.format(np.mean(D_loss)),
                   'G_loss: {:.10f}'.format(np.mean(G_loss)),
                   'Pen_loss: {:.10f}'.format(np.mean(Pen_loss)),
-                  'Info_loss: {:.10f}'.format(np.mean(Info_loss)),
+                  'MMD_loss: {:.10f}'.format(np.mean(MMD_loss)),
                   'mse_train: {:.10f}'.format(np.mean(mse_train)),
                   'shd_trian: {:.10f}'.format(np.mean(shd_trian)),
                   'time: {:.4f}s'.format(time.time() - t))
 
-            return np.mean(D_loss), np.mean(G_loss), np.mean(Pen_loss), np.mean(Info_loss), np.mean(mse_train), graph#, origin_A
+            return np.mean(D_loss), np.mean(G_loss), np.mean(Pen_loss), np.mean(MMD_loss), np.mean(mse_train), graph#, origin_A
         else:
-            
+
             print('Epoch: {:04d}'.format(epoch),
                   'D_loss: {:.10f}'.format(np.mean(D_loss)),
                   'G_loss: {:.10f}'.format(np.mean(G_loss)),
                   'Pen_loss: {:.10f}'.format(np.mean(Pen_loss)),
-                  'Info_loss: {:.10f}'.format(np.mean(Info_loss)),
+                  'MMD_loss: {:.10f}'.format(np.mean(MMD_loss)),
                   'mse_train: {:.10f}'.format(np.mean(mse_train)),
                   'time: {:.4f}s'.format(time.time() - t))
-            
-            return np.mean(D_loss), np.mean(G_loss), np.mean(Pen_loss), np.mean(Info_loss), np.mean(mse_train), graph#, origin_A
-        
-    
+
+            return np.mean(D_loss), np.mean(G_loss), np.mean(Pen_loss), np.mean(MMD_loss), np.mean(mse_train), graph#, origin_A
+
+
     def fit(self, train_loader, ground_truth_G = None):
-        
+
         if not hasattr(self, "discriminator"):
             self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate).double().to(self.device)
-            
+
         if not hasattr(self, "generator"):
-            self.generator = Generator(self.z_dims, dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
-            
+            self.generator = Generator(self.z_dims, self.code_dim, dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
+
         if not hasattr(self, "optimizerD"):
             self.optimizerD = optim.Adam(self.discriminator.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
-            
+
         if not hasattr(self, "optimizerG"):
             self.optimizerG = optim.Adam(self.generator.parameters(), lr=self.lr)
-            
+
         if not hasattr(self, "schedulerG"):
             self.schedulerG = lr_scheduler.StepLR(self.optimizerG, step_size=self.lr_decay, gamma=self.gamma)
-            
+
         if not hasattr(self, "schedulerD"):
             self.schedulerD = lr_scheduler.StepLR(self.optimizerD, step_size=self.lr_decay, gamma=self.gamma)
 
@@ -490,9 +512,9 @@ class AAE_WGAN_GP(nn.Module):
                 while self.c_A < 1e+20:
                     for epoch in range(self.epochs):
                         D_loss, G_loss, Pen_loss, Info_loss, MSE_loss, graph = self.train(train_loader,
-                        epoch, best_ELBO_loss, ground_truth_G, 
+                        epoch, best_ELBO_loss, ground_truth_G,
                         self.lambda_A, self.c_A, self.optimizerG, self.optimizerD)
-                        
+
                     print("Optimization Finished!")
                     print("Best Epoch: {:04d}".format(best_epoch))
 
@@ -508,10 +530,10 @@ class AAE_WGAN_GP(nn.Module):
                 # h_A, adj_A are computed in loss anyway, so no need to store
                 self.h_A_old = self.h_A_new
                 self.lambda_A += self.c_A * self.h_A_new
-                
+
                 if self.h_A_new <= self.h_tol:
                      break
-                
+
             if ground_truth_G != None:
 
                 graph = self.generator.fc1_to_adj()
@@ -529,7 +551,7 @@ class AAE_WGAN_GP(nn.Module):
                 # print(graph)
                 fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
                 print('threshold 0.3, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
-                
+
                 return graph
             else:
                 graph = self.generator.fc1_to_adj()
@@ -568,19 +590,19 @@ class AAE_WGAN_GP(nn.Module):
             # print(graph)
             fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
             print('threshold 0.3, Accuracy: fdr', fdr, ' tpr ', tpr, ' fpr ', fpr, 'shd', shd, 'nnz', nnz)
-    
+
     def save_model(self):
         assert self.save_directory != '', 'Saving directory not specified! Please specify a saving directory!'
         torch.save(self.generator.state_dict(), os.path.join(self.save_directory,'generator.pth'))
         torch.save(self.discriminator.state_dict(), os.path.join(self.save_directory,'discriminator.pth'))
-        
+
     def load_model(self):
         assert self.load_directory != '', 'Loading directory not specified! Please specify a loading directory!'
-        
+
         generator = Generator(self.z_dims, dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
         discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate).double().to(self.device)
-             
+
         generator.load_state_dict(torch.load(os.path.join(self.load_directory,'generator.pth')))
         discriminator.load_state_dict(torch.load(os.path.join(self.load_directory,'discriminator.pth')))
-             
+
         return generator, discriminator

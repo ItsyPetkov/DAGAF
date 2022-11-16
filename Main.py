@@ -84,6 +84,7 @@ parser.add_argument('--x_dims', type=int, default=1, #vector case: need to be eq
                     help='The number of input dimensions: default 1.')
 parser.add_argument('--z_dims', type=int, default=1,
                     help='The number of latent variable dimensions: default the same as variable size.')
+parser.add_argument("--code_dim", type=int, default=1, help="latent code")
 
 # -----------training hyperparameters
 parser.add_argument('--graph_threshold', type=  float, default = 0.3,  # 0.3 is good, 0.2 is error prune
@@ -121,6 +122,8 @@ parser.add_argument('--mul1', default=0.01, type=float,
                     help='multiplier for the L1_Loss')
 parser.add_argument('--mul2', default=0.01, type=float,
                     help='multiplier for the L2_Loss')
+parser.add_argument('--alpha', default=0.01, type=float,
+                    help='alpha multiplier for the MMD')
 
 parser.add_argument('--suffix', type=str, default='_springs5',
                     help='Suffix for training data (e.g. "_charged".')
