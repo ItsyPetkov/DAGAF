@@ -39,43 +39,56 @@ from FullDataPreProcessor import FullDataPreProcessor
 
 # AAE utility functions
 
+
 def num_categories(labels):
     return len(set(labels))
+
 
 def my_softmax(input, axis=1):
     trans_input = input.transpose(axis, 0).contiguous()
     soft_max_1d = F.softmax(trans_input, dim=-1)
     return soft_max_1d.transpose(axis, 0)
 
+
 def relu(x, derivative=False, alpha=0.1):
     rel = x * (x > 0)
     if derivative:
-        return (x > 0)*1
+        return (x > 0) * 1
     return rel
 
+
 def preprocess_adj_new(adj, device):
-    adj_normalized = (torch.eye(adj.shape[0]).double().to(device) - (adj.transpose(0,1)).to(device))
+    adj_normalized = torch.eye(adj.shape[0]).double().to(device) - (
+        adj.transpose(0, 1)
+    ).to(device)
     return adj_normalized
 
+
 def preprocess_adj_new1(adj, device):
-    adj_normalized = torch.inverse(torch.eye(adj.shape[0]).double().to(device) - adj.transpose(0,1).to(device))
+    adj_normalized = torch.inverse(
+        torch.eye(adj.shape[0]).double().to(device) - adj.transpose(0, 1).to(device)
+    )
     return adj_normalized
+
 
 def matrix_poly(matrix, d, device):
     x = torch.eye(d).double().to(device) + torch.div(matrix, d).to(device)
     return torch.matrix_power(x, d)
 
+
 # compute constraint h(A) value
 def _h_A(A, m, device):
-    expm_A = matrix_poly(A*A, m, device)
+    expm_A = matrix_poly(A * A, m, device)
     h_A = torch.trace(expm_A) - m
     return h_A
 
+
 def build_phi(w, totalcount):
-    phi = w[totalcount:].reshape(-1,1)
+    phi = w[totalcount:].reshape(-1, 1)
     return phi
 
-def build_W(w, d,totalcount):
+
+def build_W(w, d, totalcount):
     # build w
     w1 = np.zeros([d, d])
     lower_index = np.tril_indices(d, -1)
@@ -83,21 +96,23 @@ def build_W(w, d,totalcount):
 
     return w1 + w1.T - np.diag(w1.diagonal())
 
-def build_w_inv(A, phi, d,totalcount):
+
+def build_w_inv(A, phi, d, totalcount):
     # build w
     w1 = np.zeros([d, d])
-    for i in range(d-1):
-        for j in range(d-1):
-            if ((relu(phi[j]-phi[i])>1e-8)):
-                w1[i,j] = A[i,j]/relu(phi[j]-phi[i])
+    for i in range(d - 1):
+        for j in range(d - 1):
+            if relu(phi[j] - phi[i]) > 1e-8:
+                w1[i, j] = A[i, j] / relu(phi[j] - phi[i])
             else:
-                w1[i,j] = 0
-    w = (w1 + w1.T)/2.
+                w1[i, j] = 0
+    w = (w1 + w1.T) / 2.0
     wnew = np.zeros(totalcount)
     lower_index = np.tril_indices(d, -1)
     wnew[:totalcount] = w[lower_index]
 
     return wnew
+
 
 def to_categorical(y, num_columns):
     """Returns one-hot encoded Variable"""
@@ -106,13 +121,14 @@ def to_categorical(y, num_columns):
 
     return Variable(torch.FloatTensor(y_cat))
 
+
 def pns_(model_adj, dataloader, num_neighbors, thresh):
     """Preliminary neighborhood selection"""
-    #x_train, _ = train_data.sample(train_data.num_samples)
-    #x_test, _ = test_data.sample(test_data.num_samples)
-    #x = np.concatenate([x_train.detach().cpu().numpy(), x_test.detach().cpu().numpy()], 0)
+    # x_train, _ = train_data.sample(train_data.num_samples)
+    # x_test, _ = test_data.sample(test_data.num_samples)
+    # x = np.concatenate([x_train.detach().cpu().numpy(), x_test.detach().cpu().numpy()], 0)
     x = dataloader.dataset.tensors[0].squeeze()
-    #print(x.shape)
+    # print(x.shape)
 
     num_samples = x.shape[0]
     num_nodes = x.shape[1]
@@ -123,39 +139,49 @@ def pns_(model_adj, dataloader, num_neighbors, thresh):
         x_other[:, node] = 0
         reg = ExtraTreesRegressor(n_estimators=500)
         reg = reg.fit(x_other, x[:, node])
-        selected_reg = SelectFromModel(reg, threshold="{}*mean".format(thresh), prefit=True,
-                                       max_features=num_neighbors)
+        selected_reg = SelectFromModel(
+            reg,
+            threshold="{}*mean".format(thresh),
+            prefit=True,
+            max_features=num_neighbors,
+        )
         mask_selected = selected_reg.get_support(indices=False).astype(np.float)
 
         model_adj[:, node] *= mask_selected
 
     return model_adj
 
-def nll_catogrical(preds, target, add_const = False, eps=1e-16):
-    '''compute the loglikelihood of discrete variables
-    '''
-    loss = nn.CrossEntropyLoss(reduction='sum')
-    output = loss(preds, torch.argmax(target,1))
-    return output   
+
+def nll_catogrical(preds, target, add_const=False, eps=1e-16):
+    """compute the loglikelihood of discrete variables
+    """
+    loss = nn.CrossEntropyLoss(reduction="sum")
+    output = loss(preds, torch.argmax(target, 1))
+    return output
+
 
 def nll_gaussian(preds, target, variance, add_const=False):
-    
+
     mean1 = preds
     mean2 = target
-    
-    neg_log_p = variance + torch.div(torch.pow(mean1 - mean2, 2), 2.*np.exp(2. * variance))
-    
+
+    neg_log_p = variance + torch.div(
+        torch.pow(mean1 - mean2, 2), 2.0 * np.exp(2.0 * variance)
+    )
+
     if add_const:
         const = 0.5 * torch.log(2 * torch.from_numpy(np.pi) * variance)
         neg_log_p += const
-            
+
     return neg_log_p.sum() / (target.size(0))
-    
+
+
 def kl_gaussian_sem(logits):
     mu = logits
     kl_div = mu * mu
     kl_sum = kl_div.sum()
-    return (kl_sum / (logits.size(0)))*0.5
+    return (kl_sum / (logits.size(0))) * 0.5
+
 
 # def nll_catogrical(preds, target, add_const = False,  eps = 1e-20):
 #     '''compute the loglikelihood of discrete variables
@@ -164,14 +190,17 @@ def kl_gaussian_sem(logits):
 #     BCE = torch.sum(target * torch.log(preds + eps), dim=1).mean()
 #     return BCE
 
+
 def kl_categorical(preds, num_cats, eps=1e-16):
     # KL Divergence = entropy (logits) - cross_entropy(logits, uniform log-odds)
-    q_y = F.softmax(preds, dim=-1) # convert logits values to probabilities
-    kl1 = q_y * torch.log(q_y + eps) # entropy (self.latent)
-    kl2 = q_y * np.log((1.0/num_cats) + eps) # cross_entropy(logits, uniform log-odds)
-    KL_divergence = torch.sum(torch.sum(kl1 - kl2, 2),1).mean()
+    q_y = F.softmax(preds, dim=-1)  # convert logits values to probabilities
+    kl1 = q_y * torch.log(q_y + eps)  # entropy (self.latent)
+    kl2 = q_y * np.log(
+        (1.0 / num_cats) + eps
+    )  # cross_entropy(logits, uniform log-odds)
+    KL_divergence = torch.sum(torch.sum(kl1 - kl2, 2), 1).mean()
     return KL_divergence
-     
+
 
 def sample_gumbel(shape, eps=1e-10):
     """
@@ -182,7 +211,7 @@ def sample_gumbel(shape, eps=1e-10):
     (MIT license)
     """
     U = torch.rand(shape).float()
-    return - torch.log(eps - torch.log(U + eps))
+    return -torch.log(eps - torch.log(U + eps))
 
 
 def gumbel_softmax_sample(logits, tau=1, eps=1e-10):
@@ -198,6 +227,7 @@ def gumbel_softmax_sample(logits, tau=1, eps=1e-10):
         gumbel_noise = gumbel_noise.cuda()
     y = logits + Variable(gumbel_noise).double()
     return my_softmax(y / tau, axis=-1)
+
 
 def gumbel_softmax(logits, tau=1, hard=False, eps=1e-10):
     """
@@ -237,23 +267,25 @@ def gumbel_softmax(logits, tau=1, hard=False, eps=1e-10):
         y = y_soft
     return y
 
-#Plotting the DAG
-#Borrowed from Causalnex Documentation
-#https://causalnex.readthedocs.io/en/latest/03_tutorial/plotting_tutorial.html
-def draw_dag(graph, data_type, columns = None):
-    
+
+# Plotting the DAG
+# Borrowed from Causalnex Documentation
+# https://causalnex.readthedocs.io/en/latest/03_tutorial/plotting_tutorial.html
+def draw_dag(graph, data_type, columns=None):
+
     final_DAG = from_numpy_matrix(graph, create_using=nx.DiGraph)
-    
-    if data_type == 'real':
+
+    if data_type == "real":
         final_DAG = nx.relabel_nodes(
-            final_DAG, dict(zip(list(range(graph.shape[0])), columns)))
+            final_DAG, dict(zip(list(range(graph.shape[0])), columns))
+        )
     final_DAG.remove_nodes_from(list(nx.isolates(final_DAG)))
-    
-    print('FINAL DAG')
+
+    print("FINAL DAG")
     print(final_DAG.adj)
-    
-    write_dot(final_DAG,'test.dot')
-    
+
+    write_dot(final_DAG, "test.dot")
+
     fig = plt.figure(figsize=(15, 8))  # set figsize
     ax = fig.add_subplot(1, 1, 1)
     ax.set_facecolor("#001521")  # set backgrount
@@ -269,7 +301,7 @@ def draw_dag(graph, data_type, columns = None):
         linewidths=3,
         edgecolors="#4a90e2d9",
     )
-    
+
     # add labels
     nx.draw_networkx_labels(
         final_DAG,
@@ -279,7 +311,7 @@ def draw_dag(graph, data_type, columns = None):
         font_family="Helvetica",
         font_size=10,
     )
-    
+
     # add edges
     nx.draw_networkx_edges(
         final_DAG,
@@ -292,13 +324,14 @@ def draw_dag(graph, data_type, columns = None):
 
     plt.show()
     plt.close()
-    
+
+
 # data generating functions below this point
 
-def simulate_random_dag(d: int,
-                        degree: float,
-                        graph_type: str,
-                        w_range: tuple = (0.5, 2.0)) -> nx.DiGraph:
+
+def simulate_random_dag(
+    d: int, degree: float, graph_type: str, w_range: tuple = (0.5, 2.0)
+) -> nx.DiGraph:
     """Simulate random DAG with some expected degree.
     Args:
         d: number of nodes
@@ -308,10 +341,10 @@ def simulate_random_dag(d: int,
     Returns:
         G: weighted DAG
     """
-    if graph_type == 'erdos-renyi':
+    if graph_type == "erdos-renyi":
         prob = float(degree) / (d - 1)
         B = np.tril((np.random.rand(d, d) < prob).astype(float), k=-1)
-    elif graph_type == 'barabasi-albert':
+    elif graph_type == "barabasi-albert":
         m = int(round(degree / 2))
         B = np.zeros([d, d])
         bag = [0]
@@ -321,10 +354,10 @@ def simulate_random_dag(d: int,
                 B[ii, jj] = 1
             bag.append(ii)
             bag.extend(dest)
-    elif graph_type == 'full':  # ignore degree, only for experimental use
+    elif graph_type == "full":  # ignore degree, only for experimental use
         B = np.tril(np.ones([d, d]), k=-1)
     else:
-        raise ValueError('unknown graph type')
+        raise ValueError("unknown graph type")
     # random permutation
     P = np.random.permutation(np.eye(d, d))  # permutes first axis only
     B_perm = P.T.dot(B).dot(P)
@@ -334,11 +367,15 @@ def simulate_random_dag(d: int,
     G = nx.DiGraph(W)
     return G
 
-def simulate_sem(G: nx.DiGraph,
-                 n: int, x_dims: int,
-                 sem_type: str,
-                 linear_type: str,
-                 noise_scale: float = 1.0) -> np.ndarray:
+
+def simulate_sem(
+    G: nx.DiGraph,
+    n: int,
+    x_dims: int,
+    sem_type: str,
+    linear_type: str,
+    noise_scale: float = 1.0,
+) -> np.ndarray:
     """Simulate samples from SEM with specified type of noise.
     Args:
         G: weigthed DAG
@@ -348,7 +385,7 @@ def simulate_sem(G: nx.DiGraph,
     Returns:
         X: [n,d] sample matrix
     """
-    
+
     W = nx.to_numpy_array(G)
     d = W.shape[0]
     X = np.zeros([n, d, x_dims])
@@ -356,36 +393,48 @@ def simulate_sem(G: nx.DiGraph,
     assert len(ordered_vertices) == d
     for j in ordered_vertices:
         parents = list(G.predecessors(j))
-        if linear_type == 'linear':
+        if linear_type == "linear":
             eta = X[:, parents, 0].dot(W[parents, j])
-        elif linear_type == 'nonlinear_1':
+        elif linear_type == "nonlinear_1":
             eta = np.cos(X[:, parents, 0] + 1).dot(W[parents, j])
-        elif linear_type == 'nonlinear_2':
-            eta = (X[:, parents, 0]+0.5).dot(W[parents, j])
+        elif linear_type == "nonlinear_2":
+            eta = (X[:, parents, 0] + 0.5).dot(W[parents, j])
         else:
-            raise ValueError('unknown linear data type')
+            raise ValueError("unknown linear data type")
 
-        if sem_type == 'linear-gauss':
-            if linear_type == 'linear':
+        if sem_type == "linear-gauss":
+            if linear_type == "linear":
                 X[:, j, 0] = eta + np.random.normal(scale=noise_scale, size=n)
-            elif linear_type == 'nonlinear_1':
+            elif linear_type == "nonlinear_1":
                 X[:, j, 0] = eta + np.random.normal(scale=noise_scale, size=n)
-            elif linear_type == 'nonlinear_2':
-                X[:, j, 0] = 2.*np.sin(eta) + eta + np.random.normal(scale=noise_scale, size=n)
-        elif sem_type == 'linear-exp':
+            elif linear_type == "nonlinear_2":
+                X[:, j, 0] = (
+                    2.0 * np.sin(eta)
+                    + eta
+                    + np.random.normal(scale=noise_scale, size=n)
+                )
+        elif sem_type == "linear-exp":
             X[:, j, 0] = eta + np.random.exponential(scale=noise_scale, size=n)
-        elif sem_type == 'linear-gumbel':
+        elif sem_type == "linear-gumbel":
             X[:, j, 0] = eta + np.random.gumbel(scale=noise_scale, size=n)
         else:
-            raise ValueError('unknown sem type')
-    if x_dims > 1 :
-        for i in range(x_dims-1):
-            X[:, :, i+1] = np.random.normal(scale=noise_scale, size=1)*X[:, :, 0] + np.random.normal(scale=noise_scale, size=1) + np.random.normal(scale=noise_scale, size=(n, d))
-        X[:, :, 0] = np.random.normal(scale=noise_scale, size=1) * X[:, :, 0] + np.random.normal(scale=noise_scale, size=1) + np.random.normal(scale=noise_scale, size=(n, d))
+            raise ValueError("unknown sem type")
+    if x_dims > 1:
+        for i in range(x_dims - 1):
+            X[:, :, i + 1] = (
+                np.random.normal(scale=noise_scale, size=1) * X[:, :, 0]
+                + np.random.normal(scale=noise_scale, size=1)
+                + np.random.normal(scale=noise_scale, size=(n, d))
+            )
+        X[:, :, 0] = (
+            np.random.normal(scale=noise_scale, size=1) * X[:, :, 0]
+            + np.random.normal(scale=noise_scale, size=1)
+            + np.random.normal(scale=noise_scale, size=(n, d))
+        )
     return X
 
-def simulate_population_sample(W: np.ndarray,
-                               Omega: np.ndarray) -> np.ndarray:
+
+def simulate_population_sample(W: np.ndarray, Omega: np.ndarray) -> np.ndarray:
     """Simulate data matrix X that matches population least squares.
     Args:
         W: [d,d] adjacency matrix
@@ -397,9 +446,10 @@ def simulate_population_sample(W: np.ndarray,
     X = np.sqrt(d) * slin.sqrtm(Omega).dot(np.linalg.pinv(np.eye(d) - W))
     return X
 
-def count_accuracy(G_true: nx.DiGraph,
-                   G: nx.DiGraph,
-                   G_und: nx.DiGraph = None) -> tuple:
+
+def count_accuracy(
+    G_true: nx.DiGraph, G: nx.DiGraph, G_und: nx.DiGraph = None
+) -> tuple:
     """Compute FDR, TPR, and FPR for B, or optionally for CPDAG B + B_und.
     Args:
         G_true: ground truth graph
@@ -456,9 +506,10 @@ def count_accuracy(G_true: nx.DiGraph,
     shd = len(extra_lower) + len(missing_lower) + len(reverse)
     return fdr, tpr, fpr, shd, pred_size
 
-def count_accuracy_new(G_true: nx.DiGraph,
-                   G: nx.DiGraph,
-                   G_und: nx.DiGraph = None) -> tuple:
+
+def count_accuracy_new(
+    G_true: nx.DiGraph, G: nx.DiGraph, G_und: nx.DiGraph = None
+) -> tuple:
     """Compute FDR, TPR, and FPR for B, or optionally for CPDAG B + B_und.
     Args:
         G_true: ground truth graph
@@ -513,17 +564,30 @@ def count_accuracy_new(G_true: nx.DiGraph,
     extra_lower = np.setdiff1d(pred_lower, cond_lower, assume_unique=True)
     missing_lower = np.setdiff1d(cond_lower, pred_lower, assume_unique=True)
     shd = len(extra_lower) + len(missing_lower) + len(reverse)
-    print('extra %f + missing %f + reverse %f' % ( len(extra_lower), len(missing_lower), len(reverse)))
+    print(
+        "extra %f + missing %f + reverse %f"
+        % (len(extra_lower), len(missing_lower), len(reverse))
+    )
 
-    return fdr, tpr, fpr, shd, pred_size, len(extra_lower), len(missing_lower), len(reverse)
+    return (
+        fdr,
+        tpr,
+        fpr,
+        shd,
+        pred_size,
+        len(extra_lower),
+        len(missing_lower),
+        len(reverse),
+    )
+
 
 def compute_BiCScore(G, D):
-    '''compute the bic score'''
+    """compute the bic score"""
     # score = gm.estimators.BicScore(self.data).score(self.model)
     origin_score = []
     num_var = G.shape[0]
     for i in range(num_var):
-        parents = np.where(G[:,i] !=0)
+        parents = np.where(G[:, i] != 0)
         score_one = compute_local_BiCScore(D, i, parents)
         origin_score.append(score_one)
 
@@ -584,70 +648,88 @@ def compute_local_BiCScore(np_data, target, parents):
         local_count = sum(count_d[parents_state].values())
         for self_state in count_d[parents_state]:
             loglik += count_d[parents_state][self_state] * (
-                        math.log(count_d[parents_state][self_state] + 0.1) - math.log(local_count))
+                math.log(count_d[parents_state][self_state] + 0.1)
+                - math.log(local_count)
+            )
 
     # penality
     num_param = num_parent_state * (
-                num_self_state - 1)  # count_faster(count_d) - len(count_d) - 1 # minus top level and minus one
+        num_self_state - 1
+    )  # count_faster(count_d) - len(count_d) - 1 # minus top level and minus one
     bic = loglik - 0.5 * math.log(sample_size) * num_param
 
-    return bic    
+    return bic
+
 
 def data_to_tensor_dataset(X, batch_size, G=None):
-        
+
     feat_train = torch.FloatTensor(X)
     train_data = TensorDataset(feat_train, feat_train)
     train_data_loader = DataLoader(train_data, batch_size=batch_size)
-    
+
     return train_data_loader, G
 
-def load_data(args, batch_size=1000, suffix='', debug = False):
+
+def load_data(args, batch_size=1000, suffix="", debug=False):
     #  # configurations
     n, d = args.data_sample_size, args.data_variable_size
-    graph_type, degree, sem_type, linear_type = args.graph_type, args.graph_degree, args.graph_sem_type, args.graph_linear_type
+    graph_type, degree, sem_type, linear_type = (
+        args.graph_type,
+        args.graph_degree,
+        args.graph_sem_type,
+        args.graph_linear_type,
+    )
     x_dims = args.x_dims
 
-    if args.data_type == 'synthetic':
+    if args.data_type == "synthetic":
         # generate data
         G = simulate_random_dag(d, degree, graph_type)
         X = simulate_sem(G, n, x_dims, sem_type, linear_type)
-        
+
         train_data_loader, G = data_to_tensor_dataset(X, batch_size, G)
         return train_data_loader, G
 
-    elif args.data_type == 'real':
-        #this where you can use your own dataset
-        assert args.path != '', 'Data path must be specified'
-        fdpp = FullDataPreProcessor(args.path, args.column_names_list, args.initial_identifier, args.num_of_rows, args.seed)
+    elif args.data_type == "real":
+        # this where you can use your own dataset
+        assert args.path != "", "Data path must be specified"
+        fdpp = FullDataPreProcessor(
+            args.path,
+            args.column_names_list,
+            args.initial_identifier,
+            args.num_of_rows,
+            args.seed,
+        )
         preprocessed_dataframe = fdpp.get_dataframe()
         columns = fdpp.sample_dataframe(preprocessed_dataframe[0]).columns
         X = fdpp.sample_dataframe(preprocessed_dataframe[0]).values
-                
+
         train_data_loader, G = data_to_tensor_dataset(X, batch_size)
         return train_data_loader, X.shape[1], columns
-    
-    elif args.data_type == 'benchmark':
+
+    elif args.data_type == "benchmark":
         # create your own version of benchmark discrete data
-        assert args.path != '', 'Data path must be specified'
-        file_path_dataset = os.path.join(args.path, 'pathfinder_5000.txt') #e.g for pathfinder benchmark dataset it should be something like pathfinder_5000.txt
-        
+        assert args.path != "", "Data path must be specified"
+        file_path_dataset = os.path.join(
+            args.path, "pathfinder_5000.txt"
+        )  # e.g for pathfinder benchmark dataset it should be something like pathfinder_5000.txt
+
         # read file
-        data = np.loadtxt(file_path_dataset, skiprows =0, dtype=np.int32)
-        #print(data.shape)
-        
-        #find how many categories there are
+        data = np.loadtxt(file_path_dataset, skiprows=0, dtype=np.int32)
+        # print(data.shape)
+
+        # find how many categories there are
         num_cats = num_categories(data.flatten())
-            
+
         # read ground truth graph
-        file_path = os.path.join(args.path, 'pathfinder_graph.txt') #e.g for pathfinder benchmark dataset it should be somethiing like pathfinder_graph.txt
-        
-        graph = np.loadtxt(file_path, skiprows =0, dtype=np.int32)
-            
+        file_path = os.path.join(
+            args.path, "pathfinder_graph.txt"
+        )  # e.g for pathfinder benchmark dataset it should be somethiing like pathfinder_graph.txt
+
+        graph = np.loadtxt(file_path, skiprows=0, dtype=np.int32)
+
         G = nx.DiGraph(graph)
-        X = data#data[:args.num_of_rows]
-        
+        X = data  # data[:args.num_of_rows]
+
         train_data_loader, G = data_to_tensor_dataset(X, batch_size, G)
 
         return train_data_loader, X.shape[1], G, num_cats
-    
-    
