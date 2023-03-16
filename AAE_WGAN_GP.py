@@ -24,6 +24,7 @@ import torch
 import math
 import torch.nn as nn
 import torch.nn.functional as F
+import scipy.optimize as sopt
 import numpy as np
 import networkx as nx
 import scipy.linalg as slin
@@ -53,11 +54,6 @@ class Discriminator(nn.Module):
 
         seq += [Linear(dim, 1)]
         self.seq = Sequential(*seq)
-
-        #self.output_layer = Linear(dim, 1)
-        #self.mu = Linear(dim, 1)
-        #self.std = Linear(dim, 1)
-        #self.latent_layer = Linear(dim, 1)
 
         self.init_weights()
 
@@ -98,34 +94,30 @@ class Discriminator(nn.Module):
 
     def forward(self, input):
         assert input.size()[0] % self.pac == 0
-        #seq_out = self.seq(input.view(-1, self.pacdim))
-        #output = self.output_layer(seq_out)
-        #latent_code = self.latent_layer(seq_out)
-        #mu = self.mu(seq_out)
-        #std = self.std(seq_out)
-        #return output, mu, std
         return self.seq(input.view(-1, self.pacdim))
-
+    
 class Generator(nn.Module):
-    """Generator module (based on DAG-NotearsMLP)"""
-    def __init__(self, m, k, dims, bias=True):
+    def __init__(self, n, m, dims, device, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
-        d = dims[0]
+        self.d = dims[0]
         self.dims = dims
+        self.m = m
+        self.n = n
+        self.device = device
         # fc1: variable splitting for l1
-        self.fc1_pos = nn.Linear(d, d * dims[1], bias=bias)
-        self.fc1_neg = nn.Linear(d, d * dims[1], bias=bias)
+        self.fc1_pos = nn.Linear(self.d, self.d * dims[1], bias=bias)
+        self.fc1_neg = nn.Linear(self.d, self.d * dims[1], bias=bias)
         self.fc1_pos.weight.bounds = self._bounds()
         self.fc1_neg.weight.bounds = self._bounds()
         # fc2: local linear layers
         layers = []
         for l in range(len(dims) - 2):
-            layers.append(LocallyConnected(d, dims[l + 1]+m, dims[l + 2], bias=bias))
+            layers.append(LocallyConnected(self.d, dims[l + 1]+self.m, dims[l + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
         self.init_weights()
-
+        
     def init_weights(self):
         for m in self.modules():
             if isinstance(m, Linear):
@@ -134,7 +126,7 @@ class Generator(nn.Module):
             elif isinstance(m, BatchNorm1d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-
+                
     def _bounds(self):
         d = self.dims[0]
         bounds = []
@@ -148,19 +140,17 @@ class Generator(nn.Module):
                     bounds.append(bound)
         return bounds
 
-    def forward(self, x, n, d, m, k):  # [n, d] -> [n, d]
+    def forward(self, x):  # [n, d] -> [n, d]
         x = self.fc1_pos(x) - self.fc1_neg(x)  # [n, d * m1]
         x = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
         for fc in self.fc2:
             x = torch.sigmoid(x)  # [n, d, m1]
-            z = Variable(torch.FloatTensor(np.random.normal(0, 1, (n, d, m)))).double().cuda()
-            #c = Variable(torch.FloatTensor(np.random.uniform(-1, 1, (n, d, k)))).double().cuda()
+            z = Variable(torch.FloatTensor(np.random.normal(0, 1, (self.n , self.d, self.m)))).double().to(self.device)
             x = torch.cat((x,z), dim=2)
-            #x = torch.cat((x,c), dim=2)
             x = fc(x)  # [n, d, m2]
         x = x.squeeze(dim=2)  # [n, d]
         return x
-
+    
     def h_func(self):
         """Constrain 2-norm-squared of fc1 weights along m1 dim to be a DAG"""
         d = self.dims[0]
@@ -198,7 +188,7 @@ class Generator(nn.Module):
         W = torch.sqrt(A)  # [i, j]
         W = W.cpu().detach().numpy()  # [i, j]
         return W
-
+    
 class LocallyConnected(nn.Module):
     """Local linear layer, i.e. Conv1dLocal() with filter size 1.
     Args:
@@ -269,11 +259,105 @@ class TraceExpm(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         E, = ctx.saved_tensors
         grad_input = grad_output * E.t()
-        return grad_input.cuda()
+        return grad_input.to(device)
 
 trace_expm = TraceExpm.apply
+
+class LBFGSBScipy(torch.optim.Optimizer):
+    """Wrap L-BFGS-B algorithm, using scipy routines.
+    
+    Courtesy: Arthur Mensch's gist
+    https://gist.github.com/arthurmensch/c55ac413868550f89225a0b9212aa4cd
+    """
+
+    def __init__(self, params):
+        defaults = dict()
+        super(LBFGSBScipy, self).__init__(params, defaults)
+
+        if len(self.param_groups) != 1:
+            raise ValueError("LBFGSBScipy doesn't support per-parameter options"
+                             " (parameter groups)")
+
+        self._params = self.param_groups[0]['params']
+        self._numel = sum([p.numel() for p in self._params])
+
+    def _gather_flat_grad(self):
+        views = []
+        for p in self._params:
+            if p.grad is None:
+                view = p.data.new(p.data.numel()).zero_()
+            elif p.grad.data.is_sparse:
+                view = p.grad.data.to_dense().view(-1)
+            else:
+                view = p.grad.data.view(-1)
+            views.append(view)
+        return torch.cat(views, 0)
+
+    def _gather_flat_bounds(self):
+        bounds = []
+        for p in self._params:
+            if hasattr(p, 'bounds'):
+                b = p.bounds
+            else:
+                b = [(None, None)] * p.numel()
+            bounds += b
+        return bounds
+
+    def _gather_flat_params(self):
+        views = []
+        for p in self._params:
+            if p.data.is_sparse:
+                view = p.data.to_dense().view(-1)
+            else:
+                view = p.data.view(-1)
+            views.append(view)
+        return torch.cat(views, 0)
+
+    def _distribute_flat_params(self, params):
+        offset = 0
+        for p in self._params:
+            numel = p.numel()
+            # view as to avoid deprecated pointwise semantics
+            p.data = params[offset:offset + numel].view_as(p.data)
+            offset += numel
+        assert offset == self._numel
+
+    def step(self, closure):
+        """Performs a single optimization step.
+        Arguments:
+            closure (callable): A closure that reevaluates the model
+                and returns the loss.
+        """
+        assert len(self.param_groups) == 1
+
+        def wrapped_closure(flat_params):
+            """closure must call zero_grad() and backward()"""
+            flat_params = torch.from_numpy(flat_params)
+            flat_params = flat_params.to(torch.get_default_dtype())
+            self._distribute_flat_params(flat_params)
+            loss = closure()
+            loss = loss.item()
+            flat_grad = self._gather_flat_grad().cpu().detach().numpy()
+            return loss, flat_grad.astype('float64')
+
+        initial_params = self._gather_flat_params()
+        initial_params = initial_params.cpu().detach().numpy()
+
+        bounds = self._gather_flat_bounds()
+
+        # Magic
+        sol = sopt.minimize(wrapped_closure,
+                            initial_params,
+                            method='L-BFGS-B',
+                            jac=True,
+                            bounds=bounds)
+
+        final_params = torch.from_numpy(sol.x)
+        final_params = final_params.to(torch.get_default_dtype())
+        self._distribute_flat_params(final_params)
 
 class AAE_WGAN_GP(nn.Module):
     """DAG-AAE model/framework."""
@@ -320,7 +404,7 @@ class AAE_WGAN_GP(nn.Module):
         self.dropout_rate = args.dropout_rate
 
     def forward(self, inputs):
-        fake_data = self.generator(inputs.squeeze(), self.batch_size, self.data_variable_size, self.z_dims, self.code_dim)
+        fake_data = self.generator(inputs.squeeze())
         return fake_data
 
     def update_optimizer(self, optimizer, original_lr, c_A):
@@ -359,6 +443,11 @@ class AAE_WGAN_GP(nn.Module):
         xy_kernel = self.compute_kernel(x, y)
         mmd = x_kernel.mean() + y_kernel.mean() - 2*xy_kernel.mean()
         return ((1 - self.alpha) * mmd)
+    
+    def squared_loss(self, output, target):
+        n = target.shape[0]
+        loss = 0.5 / n * torch.sum((output - target) ** 2)
+        return loss
 
     def train(self, train_loader, epoch, best_val_loss, ground_truth_G, lambda_A, c_A, optimizerG, optimizerD):
         '''training algorithm for a single epoch'''
@@ -412,34 +501,45 @@ class AAE_WGAN_GP(nn.Module):
                 loss_d = optimizerD.step()
 
             ###############################################
-            # (2) Update G network: maximize log(D(G(z)))
+            # (2) Update MLP network: with square loss
             ###############################################
-
+            data, relations = Variable(data.to(self.device)).double(), Variable(relations.to(self.device)).double()
+            
             optimizerG.zero_grad()
 
             fake_data = self(data)
-
-            y_fake = self.discriminator(fake_data)
-
-            loss_g = -torch.mean(F.softplus(y_fake))
+            
+            loss_mmd = self.compute_mmd(fake_data, data.squeeze())
+            
+            MMD_loss.append(loss_mmd.item())
+            
+            loss = self.squared_loss(fake_data, data.squeeze()) + loss_mmd
 
             h_A = self.generator.h_func()
 
+            penalty = lambda_A * h_A + 0.5 * c_A * h_A * h_A
+            
             l2_reg = 0.5 * self.mul2 * self.generator.l2_reg()
             l1_reg = self.mul1 * self.generator.fc1_l1_reg()
 
-            loss_g += lambda_A * h_A + 0.5 * c_A * h_A * h_A
-
-            loss_g += l2_reg + l1_reg
-
-            G_loss.append(loss_g.item())
-            loss_g.backward(retain_graph=True)
-
-            loss_mmd = self.compute_mmd(data.squeeze(), fake_data)
+            loss_mlp = loss + penalty + l2_reg + l1_reg
             
-            MMD_loss.append(loss_mmd.item())
-            loss_mmd.backward()
-            optimizerG.step()
+            loss_mlp.backward(retain_graph=True)
+            loss_mlp = optimizerG.step()
+            
+            ###############################################
+            # (3) Update G network: maximize log(D(G(z)))
+            ###############################################
+            
+            optimizerG.zero_grad()
+
+            y_fake = self.discriminator(fake_data.data.clone())
+            
+            loss_g = -torch.mean(F.softplus(y_fake))
+            
+            G_loss.append(loss_g.item())
+            loss_g.backward()
+            loss_g = optimizerG.step()
 
             self.schedulerG.step()
             self.schedulerD.step()
@@ -485,7 +585,7 @@ class AAE_WGAN_GP(nn.Module):
             self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate).double().to(self.device)
 
         if not hasattr(self, "generator"):
-            self.generator = Generator(self.z_dims, self.code_dim, dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
+            self.generator = Generator(self.batch_size, self.z_dims, dims=[self.data_variable_size, 10, 1], device=self.device, bias=True).double().to(self.device)
 
         if not hasattr(self, "optimizerD"):
             self.optimizerD = optim.Adam(self.discriminator.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
@@ -599,7 +699,7 @@ class AAE_WGAN_GP(nn.Module):
     def load_model(self):
         assert self.load_directory != '', 'Loading directory not specified! Please specify a loading directory!'
 
-        generator = Generator(self.z_dims, dims=[self.data_variable_size, 10, 1], bias=True).double().to(self.device)
+        generator = Generator(self.batch_size, self.z_dims, dims=[self.data_variable_size, 10, 1], device=self.device, bias=True).double().to(self.device)
         discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate).double().to(self.device)
 
         generator.load_state_dict(torch.load(os.path.join(self.load_directory,'generator.pth')))

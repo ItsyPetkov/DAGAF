@@ -97,7 +97,7 @@ parser.add_argument('--c_A',  type = float, default= 1,
                     help='coefficient for absolute value h(A).')
 parser.add_argument('--negative_slope', type=float, default=0.2,
                     help='negative_slope for leaky_relu')
-parser.add_argument('--dropout_rate', type=float, default=0.0,
+parser.add_argument('--dropout_rate', type=float, default=0.5,
                     help='rate for discriminator dropout')
 parser.add_argument('--noise', type=float, default=1e-20,
                     help='amount of noise for the ANM')

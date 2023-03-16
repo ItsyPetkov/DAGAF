@@ -633,6 +633,7 @@ def load_data(args, batch_size=1000, suffix='', debug = False):
         
         # read file
         data = np.loadtxt(file_path_dataset, skiprows =0, dtype=np.int32)
+        #print(data.shape)
         
         #find how many categories there are
         num_cats = num_categories(data.flatten())
@@ -643,7 +644,7 @@ def load_data(args, batch_size=1000, suffix='', debug = False):
         graph = np.loadtxt(file_path, skiprows =0, dtype=np.int32)
             
         G = nx.DiGraph(graph)
-        X = data[:args.num_of_rows]
+        X = data#data[:args.num_of_rows]
         
         train_data_loader, G = data_to_tensor_dataset(X, batch_size, G)
 
