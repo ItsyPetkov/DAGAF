@@ -382,7 +382,11 @@ class AAE_WGAN_GP(nn.Module):
         self,
         train_loader,
         epoch,
-        best_val_loss,
+        best_epoch,
+        best_mse_loss,
+        best_mse_data,
+        best_shd,
+        best_shd_graph,
         ground_truth_G,
         lambda_A,
         c_A,
@@ -501,13 +505,27 @@ class AAE_WGAN_GP(nn.Module):
             graph = self.generator.fc1_to_adj()
             graph[np.abs(graph) < self.graph_threshold] = 0
 
+            mse = F.mse_loss(fake_data, data.squeeze()).item()
+
             if ground_truth_G != None:
                 fdr, tpr, fpr, shd, nnz = count_accuracy(
                     ground_truth_G, nx.DiGraph(graph)
                 )
                 shd_trian.append(shd)
 
-            mse_train.append(F.mse_loss(fake_data, data.squeeze()).item())
+                if best_shd == np.inf and best_mse_loss == np.inf:
+                    best_shd = shd
+                    best_mse_loss = mse
+                elif shd < best_shd:
+                    best_shd = shd
+                    best_shd_graph = graph
+                    best_mse_loss = np.inf
+                elif shd == best_shd and mse < best_mse_loss:
+                    best_mse_loss = mse
+                    best_mse_data = fake_data
+                    best_epoch = epoch
+
+            mse_train.append(mse)
 
         if ground_truth_G != None:
 
@@ -529,6 +547,11 @@ class AAE_WGAN_GP(nn.Module):
                 np.mean(MMD_loss),
                 np.mean(mse_train),
                 graph,
+                best_shd,
+                best_shd_graph,
+                best_mse_loss,
+                best_mse_data,
+                best_epoch,
             )  # , origin_A
         else:
 
@@ -602,10 +625,13 @@ class AAE_WGAN_GP(nn.Module):
         best_ELBO_loss = np.inf
         best_NLL_loss = np.inf
         best_MSE_loss = np.inf
+        best_shd = np.inf
         best_epoch = 0
         best_ELBO_graph = []
         best_NLL_graph = []
         best_MSE_graph = []
+        best_shd_graph = []
+        best_MSE_data = []
 
         try:
             for step_k in range(self.k_max_iter):
@@ -618,10 +644,19 @@ class AAE_WGAN_GP(nn.Module):
                             Info_loss,
                             MSE_loss,
                             graph,
+                            best_shd,
+                            best_shd_graph,
+                            best_MSE_loss,
+                            best_MSE_data,
+                            best_epoch,
                         ) = self.train(
                             train_loader,
                             epoch,
-                            best_ELBO_loss,
+                            best_epoch,
+                            best_MSE_loss,
+                            best_MSE_data,
+                            best_shd,
+                            best_shd_graph,
                             ground_truth_G,
                             self.lambda_A,
                             self.c_A,
@@ -631,6 +666,12 @@ class AAE_WGAN_GP(nn.Module):
 
                     print("Optimization Finished!")
                     print("Best Epoch: {:04d}".format(best_epoch))
+                    print("Best SHD: {:04d}".format(best_shd))
+                    print("Best MSE Loss: {:.10f}".format(best_MSE_loss))
+                    # print("Best SHD Graph:")
+                    # print(best_shd_graph)
+                    # print("Best MSE Data:")
+                    # print(best_MSE_data)
 
                     # update parameters
                     with torch.no_grad():
@@ -650,47 +691,10 @@ class AAE_WGAN_GP(nn.Module):
 
             if ground_truth_G != None:
 
-                graph = self.generator.fc1_to_adj()
-                graph[np.abs(graph) < 0.1] = 0
+                best_shd_graph[np.abs(best_shd_graph) < 0.3] = 0
                 # print(graph)
                 fdr, tpr, fpr, shd, nnz = count_accuracy(
-                    ground_truth_G, nx.DiGraph(graph)
-                )
-                print(
-                    "threshold 0.1, Accuracy: fdr",
-                    fdr,
-                    " tpr ",
-                    tpr,
-                    " fpr ",
-                    fpr,
-                    "shd",
-                    shd,
-                    "nnz",
-                    nnz,
-                )
-
-                graph[np.abs(graph) < 0.2] = 0
-                # print(graph)
-                fdr, tpr, fpr, shd, nnz = count_accuracy(
-                    ground_truth_G, nx.DiGraph(graph)
-                )
-                print(
-                    "threshold 0.2, Accuracy: fdr",
-                    fdr,
-                    " tpr ",
-                    tpr,
-                    " fpr ",
-                    fpr,
-                    "shd",
-                    shd,
-                    "nnz",
-                    nnz,
-                )
-
-                graph[np.abs(graph) < 0.3] = 0
-                # print(graph)
-                fdr, tpr, fpr, shd, nnz = count_accuracy(
-                    ground_truth_G, nx.DiGraph(graph)
+                    ground_truth_G, nx.DiGraph(best_shd_graph)
                 )
                 print(
                     "threshold 0.3, Accuracy: fdr",
@@ -705,9 +709,9 @@ class AAE_WGAN_GP(nn.Module):
                     nnz,
                 )
 
-                return graph
+                return best_shd_graph
             else:
-                graph = self.generator.fc1_to_adj()
+                # graph = self.generator.fc1_to_adj()
                 graph[np.abs(graph) < self.graph_threshold] = 0
                 return graph
 
@@ -767,10 +771,12 @@ class AAE_WGAN_GP(nn.Module):
                 nnz,
             )
 
-            graph = self.generator.fc1_to_adj()
-            graph[np.abs(graph) < 0.1] = 0
+            # best_shd_graph = self.generator.fc1_to_adj()
+            best_shd_graph[np.abs(best_shd_graph) < 0.1] = 0
             # print(graph)
-            fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+            fdr, tpr, fpr, shd, nnz = count_accuracy(
+                ground_truth_G, nx.DiGraph(best_shd_graph)
+            )
             print(
                 "threshold 0.1, Accuracy: fdr",
                 fdr,
@@ -784,9 +790,11 @@ class AAE_WGAN_GP(nn.Module):
                 nnz,
             )
 
-            graph[np.abs(graph) < 0.2] = 0
+            best_shd_graph[np.abs(best_shd_graph) < 0.2] = 0
             # print(graph)
-            fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+            fdr, tpr, fpr, shd, nnz = count_accuracy(
+                ground_truth_G, nx.DiGraph(best_shd_graph)
+            )
             print(
                 "threshold 0.2, Accuracy: fdr",
                 fdr,
@@ -800,9 +808,11 @@ class AAE_WGAN_GP(nn.Module):
                 nnz,
             )
 
-            graph[np.abs(graph) < 0.3] = 0
+            best_shd_graph[np.abs(best_shd_graph) < 0.3] = 0
             # print(graph)
-            fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+            fdr, tpr, fpr, shd, nnz = count_accuracy(
+                ground_truth_G, nx.DiGraph(best_shd_graph)
+            )
             print(
                 "threshold 0.3, Accuracy: fdr",
                 fdr,

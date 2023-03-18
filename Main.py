@@ -96,7 +96,7 @@ parser.add_argument(
 # -----------data parameters ------
 # configurations
 parser.add_argument(
-    "--synthesize", type=int, default=0, help="Flag for synthesiing synthetic data"
+    "--synthesize", type=int, default=0, help="Flag for synthesing synthetic data"
 )
 parser.add_argument(
     "--pns", type=int, default=1, help="Flag for primary neighbour selection"
@@ -157,6 +157,7 @@ parser.add_argument(
     help="The number of latent variable dimensions: default the same as variable size.",
 )
 parser.add_argument("--code_dim", type=int, default=1, help="latent code")
+parser.add_argument("--export", type=int, default=0, help="Flag for exporting data")
 
 # -----------training hyperparameters
 parser.add_argument(
@@ -327,7 +328,10 @@ def main():
 
         # draw_dag(causal_graph, args.data_type)
 
-    # causal_graph.to_csv(os.path.join(args.export_directory, 'adjacency_matrix.csv'), index=False)
+    if args.export:
+        causal_graph.to_csv(
+            os.path.join(args.export_directory, "adjacency_matrix.csv"), index=False
+        )
 
     print(
         "Programm finished in: "
