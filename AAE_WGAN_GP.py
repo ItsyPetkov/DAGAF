@@ -524,6 +524,12 @@ class AAE_WGAN_GP(nn.Module):
                     best_mse_loss = mse
                     best_mse_data = fake_data
                     best_epoch = epoch
+            else:
+                if best_mse_loss == np.inf:
+                    best_mse_loss = mse
+                elif mse < best_mse_loss:
+                    best_mse_loss = mse
+                    best_mse_data = fake_data
 
             mse_train.append(mse)
 
@@ -709,11 +715,11 @@ class AAE_WGAN_GP(nn.Module):
                     nnz,
                 )
 
-                return best_shd_graph
+                return best_shd_graph, best_MSE_data
             else:
                 # graph = self.generator.fc1_to_adj()
                 graph[np.abs(graph) < self.graph_threshold] = 0
-                return graph
+                return graph, best_MSE_data
 
         except KeyboardInterrupt:
             # print the best anway

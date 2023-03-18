@@ -324,13 +324,16 @@ def main():
         adj_A = np.zeros((num_nodes, num_nodes))
 
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
-        causal_graph = aae_wgan_gp.fit(train_data, ground_truth)
+        causal_graph, data = aae_wgan_gp.fit(train_data, ground_truth)
 
         # draw_dag(causal_graph, args.data_type)
 
     if args.export:
         causal_graph.to_csv(
             os.path.join(args.export_directory, "adjacency_matrix.csv"), index=False
+        )
+        data.to_csv(
+            os.path.join(args.export_directory, "generated_data.csv"), index=False
         )
 
     print(
