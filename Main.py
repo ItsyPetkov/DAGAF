@@ -96,7 +96,7 @@ parser.add_argument(
 # -----------data parameters ------
 # configurations
 parser.add_argument(
-    "--synthesize", type=int, default=0, help="Flag for synthesing synthetic data"
+    "--synthesize", type=int, default=1, help="Flag for synthesing synthetic data"
 )
 parser.add_argument(
     "--pns", type=int, default=1, help="Flag for primary neighbour selection"
@@ -156,7 +156,12 @@ parser.add_argument(
     default=1,
     help="The number of latent variable dimensions: default the same as variable size.",
 )
-parser.add_argument("--code_dim", type=int, default=1, help="latent code")
+parser.add_argument(
+    "--steps",
+    type=int,
+    default=1,
+    help="Number of steps for time-series data generation",
+)
 parser.add_argument("--export", type=int, default=0, help="Flag for exporting data")
 
 # -----------training hyperparameters
@@ -196,7 +201,7 @@ parser.add_argument(
 parser.add_argument(
     "--batch_size",
     type=int,
-    default=100,  # note: should be divisible by sample size, otherwise throw an error
+    default=100,  # note: should be divisible by sample size, otherwise throw an error, default is 100 but better use 500 as it is faster and accuracy is preserved
     help="Number of samples per batch.",
 )
 parser.add_argument(
@@ -276,7 +281,7 @@ def main():
 
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
 
-        causal_graph = aae_wgan_gp.fit(train_loader)
+        causal_graph, data = aae_wgan_gp.fit(train_loader)
 
         draw_dag(causal_graph, args.data_type, columns)
 
@@ -292,14 +297,14 @@ def main():
 
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
 
-        causal_graph = aae_wgan_gp.fit(train_loader, ground_truth_G)
+        causal_graph, data = aae_wgan_gp.fit(train_loader, ground_truth_G)
 
         BIC_score = compute_BiCScore(
             np.asarray(nx.to_numpy_matrix(ground_truth_G)), causal_graph
         )
         print("BIC_score: " + str(BIC_score))
 
-        draw_dag(causal_graph, args.data_type)
+        # draw_dag(causal_graph, args.data_type)
 
     else:
         if args.synthesize:
@@ -329,12 +334,15 @@ def main():
         # draw_dag(causal_graph, args.data_type)
 
     if args.export:
-        causal_graph.to_csv(
+        assert (
+            args.export_directory != ""
+        ), "Export directory not specified! Please specify an export directory!"
+        pd.DataFrame(causal_graph).to_csv(
             os.path.join(args.export_directory, "adjacency_matrix.csv"), index=False
         )
-        data.to_csv(
-            os.path.join(args.export_directory, "generated_data.csv"), index=False
-        )
+        # data.to_csv(
+        #     os.path.join(args.export_directory, "generated_data.csv"), index=False
+        # )
 
     print(
         "Programm finished in: "

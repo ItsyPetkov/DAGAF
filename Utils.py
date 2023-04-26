@@ -374,6 +374,7 @@ def simulate_sem(
     x_dims: int,
     sem_type: str,
     linear_type: str,
+    steps: int,
     noise_scale: float = 1.0,
 ) -> np.ndarray:
     """Simulate samples from SEM with specified type of noise.
@@ -389,49 +390,59 @@ def simulate_sem(
     W = nx.to_numpy_array(G)
     d = W.shape[0]
     X = np.zeros([n, d, x_dims])
+    tsX = np.zeros([n, d, steps])
     ordered_vertices = list(nx.topological_sort(G))
     assert len(ordered_vertices) == d
-    for j in ordered_vertices:
-        parents = list(G.predecessors(j))
-        if linear_type == "linear":
-            eta = X[:, parents, 0].dot(W[parents, j])
-        elif linear_type == "nonlinear_1":
-            eta = np.cos(X[:, parents, 0] + 1).dot(W[parents, j])
-        elif linear_type == "nonlinear_2":
-            eta = (X[:, parents, 0] + 0.5).dot(W[parents, j])
-        else:
-            raise ValueError("unknown linear data type")
-
-        if sem_type == "linear-gauss":
+    for i in range(steps):
+        for j in ordered_vertices:
+            parents = list(G.predecessors(j))
             if linear_type == "linear":
-                X[:, j, 0] = eta + np.random.normal(scale=noise_scale, size=n)
+                eta = X[:, parents, 0].dot(W[parents, j])
             elif linear_type == "nonlinear_1":
-                X[:, j, 0] = eta + np.random.normal(scale=noise_scale, size=n)
+                eta = np.cos(X[:, parents, 0] + 1).dot(W[parents, j])
             elif linear_type == "nonlinear_2":
-                X[:, j, 0] = (
-                    2.0 * np.sin(eta)
-                    + eta
-                    + np.random.normal(scale=noise_scale, size=n)
+                eta = (X[:, parents, 0] + 0.5).dot(W[parents, j])
+            else:
+                raise ValueError("unknown linear data type")
+
+            if sem_type == "linear-gauss":
+                if linear_type == "linear":
+                    X[:, j, 0] = eta + np.random.normal(scale=noise_scale, size=n)
+                elif linear_type == "nonlinear_1":
+                    X[:, j, 0] = eta + np.random.normal(scale=noise_scale, size=n)
+                elif linear_type == "nonlinear_2":
+                    X[:, j, 0] = (
+                        2.0 * np.sin(eta)
+                        + eta
+                        + np.random.normal(scale=noise_scale, size=n)
+                    )
+            elif sem_type == "linear-exp":
+                X[:, j, 0] = eta + np.random.exponential(scale=noise_scale, size=n)
+            elif sem_type == "linear-gumbel":
+                X[:, j, 0] = eta + np.random.gumbel(scale=noise_scale, size=n)
+            else:
+                raise ValueError("unknown sem type")
+        if x_dims > 1:
+            for i in range(x_dims - 1):
+                X[:, :, i + 1] = (
+                    np.random.normal(scale=noise_scale, size=1) * X[:, :, 0]
+                    + np.random.normal(scale=noise_scale, size=1)
+                    + np.random.normal(scale=noise_scale, size=(n, d))
                 )
-        elif sem_type == "linear-exp":
-            X[:, j, 0] = eta + np.random.exponential(scale=noise_scale, size=n)
-        elif sem_type == "linear-gumbel":
-            X[:, j, 0] = eta + np.random.gumbel(scale=noise_scale, size=n)
-        else:
-            raise ValueError("unknown sem type")
-    if x_dims > 1:
-        for i in range(x_dims - 1):
-            X[:, :, i + 1] = (
+            X[:, :, 0] = (
                 np.random.normal(scale=noise_scale, size=1) * X[:, :, 0]
                 + np.random.normal(scale=noise_scale, size=1)
                 + np.random.normal(scale=noise_scale, size=(n, d))
             )
-        X[:, :, 0] = (
-            np.random.normal(scale=noise_scale, size=1) * X[:, :, 0]
-            + np.random.normal(scale=noise_scale, size=1)
-            + np.random.normal(scale=noise_scale, size=(n, d))
-        )
-    return X
+
+        if steps == 1:
+            return X
+        else:
+            if i == 0:
+                tsX = X
+            else:
+                tsX = np.concatenate((tsX, X), axis=2)
+    return tsX
 
 
 def simulate_population_sample(W: np.ndarray, Omega: np.ndarray) -> np.ndarray:
@@ -672,7 +683,7 @@ def data_to_tensor_dataset(X, batch_size, G=None):
 
 def load_data(args, batch_size=1000, suffix="", debug=False):
     #  # configurations
-    n, d = args.data_sample_size, args.data_variable_size
+    n, d, steps = args.data_sample_size, args.data_variable_size, args.steps
     graph_type, degree, sem_type, linear_type = (
         args.graph_type,
         args.graph_degree,
@@ -684,7 +695,7 @@ def load_data(args, batch_size=1000, suffix="", debug=False):
     if args.data_type == "synthetic":
         # generate data
         G = simulate_random_dag(d, degree, graph_type)
-        X = simulate_sem(G, n, x_dims, sem_type, linear_type)
+        X = simulate_sem(G, n, x_dims, sem_type, linear_type, steps)
 
         train_data_loader, G = data_to_tensor_dataset(X, batch_size, G)
         return train_data_loader, G
@@ -710,7 +721,7 @@ def load_data(args, batch_size=1000, suffix="", debug=False):
         # create your own version of benchmark discrete data
         assert args.path != "", "Data path must be specified"
         file_path_dataset = os.path.join(
-            args.path, "pathfinder_5000.txt"
+            args.path, "sachs_5000.txt"
         )  # e.g for pathfinder benchmark dataset it should be something like pathfinder_5000.txt
 
         # read file
@@ -722,7 +733,7 @@ def load_data(args, batch_size=1000, suffix="", debug=False):
 
         # read ground truth graph
         file_path = os.path.join(
-            args.path, "pathfinder_graph.txt"
+            args.path, "sachs_graph.txt"
         )  # e.g for pathfinder benchmark dataset it should be somethiing like pathfinder_graph.txt
 
         graph = np.loadtxt(file_path, skiprows=0, dtype=np.int32)

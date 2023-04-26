@@ -107,7 +107,7 @@ class Discriminator(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, n, m, dims, device, bias=True):
+    def __init__(self, n, m, x_dims, dims, device, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
@@ -115,6 +115,7 @@ class Generator(nn.Module):
         self.dims = dims
         self.m = m
         self.n = n
+        self.x_dims = x_dims
         self.device = device
         # fc1: variable splitting for l1
         self.fc1_pos = nn.Linear(self.d, self.d * dims[1], bias=bias)
@@ -153,21 +154,34 @@ class Generator(nn.Module):
         return bounds
 
     def forward(self, x):  # [n, d] -> [n, d]
-        x = self.fc1_pos(x) - self.fc1_neg(x)  # [n, d * m1]
-        x = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
-        for fc in self.fc2:
-            x = torch.sigmoid(x)  # [n, d, m1]
-            z = (
-                Variable(
-                    torch.FloatTensor(np.random.normal(0, 1, (self.n, self.d, self.m)))
+        # create empty tensor here
+        X = torch.empty(self.n, self.d, self.x_dims)
+        for i in range(self.x_dims):
+            current_x = x[:, :, i]
+            current_x = self.fc1_pos(current_x) - self.fc1_neg(current_x)  # [n, d * m1]
+            current_x = current_x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
+            for fc in self.fc2:
+                current_x = torch.sigmoid(current_x)  # [n, d, m1]
+                z = (
+                    Variable(
+                        torch.FloatTensor(
+                            np.random.normal(0, 1, (self.n, self.d, self.m))
+                        )
+                    )
+                    .double()
+                    .to(self.device)
                 )
-                .double()
-                .to(self.device)
-            )
-            x = torch.cat((x, z), dim=2)
-            x = fc(x)  # [n, d, m2]
-        x = x.squeeze(dim=2)  # [n, d]
-        return x
+                current_x = torch.cat((current_x, z), dim=2)
+                current_x = fc(current_x)  # [n, d, m2]
+            current_x = current_x.squeeze(dim=2)  # [n, d]
+            if self.x_dims == 1:
+                return current_x.unsqueeze(-1)
+            else:
+                if i == 0:
+                    X = current_x.unsqueeze(-1)
+                else:
+                    X = torch.cat((X, current_x.unsqueeze(-1)), dim=2)
+        return X
 
     def h_func(self):
         """Constrain 2-norm-squared of fc1 weights along m1 dim to be a DAG"""
@@ -293,6 +307,7 @@ class AAE_WGAN_GP(nn.Module):
     def __init__(self, args, adj_A):
         super(AAE_WGAN_GP, self).__init__()
 
+        self.verbose = args.verbose
         self.data_type = args.data_type
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.batch_size = args.batch_size
@@ -308,7 +323,7 @@ class AAE_WGAN_GP(nn.Module):
 
         self.x_dims = args.x_dims
         self.z_dims = args.z_dims
-        self.code_dim = args.code_dim
+        self.steps = args.steps
 
         self.encoder_hidden = args.encoder_hidden
         self.decoder_hidden = args.decoder_hidden
@@ -333,7 +348,7 @@ class AAE_WGAN_GP(nn.Module):
         self.dropout_rate = args.dropout_rate
 
     def forward(self, inputs):
-        fake_data = self.generator(inputs.squeeze())
+        fake_data = self.generator(inputs)
         return fake_data
 
     def update_optimizer(self, optimizer, original_lr, c_A):
@@ -367,6 +382,14 @@ class AAE_WGAN_GP(nn.Module):
         return torch.exp(-kernel_input)  # (x_size, y_size)
 
     def compute_mmd(self, x, y):
+
+        if self.x_dims > 1:
+            x = x.view(-1, self.data_variable_size)
+            y = y.view(-1, self.data_variable_size)
+        else:
+            x = x.squeeze()
+            y = y.squeeze()
+
         x_kernel = self.compute_kernel(x, x)
         y_kernel = self.compute_kernel(y, y)
         xy_kernel = self.compute_kernel(x, y)
@@ -466,11 +489,11 @@ class AAE_WGAN_GP(nn.Module):
 
             fake_data = self(data)
 
-            loss_mmd = self.compute_mmd(fake_data, data.squeeze())
+            loss_mmd = self.compute_mmd(fake_data, data)
 
             MMD_loss.append(loss_mmd.item())
 
-            loss = self.squared_loss(fake_data, data.squeeze()) + loss_mmd
+            loss = self.squared_loss(fake_data, data) + loss_mmd
 
             h_A = self.generator.h_func()
 
@@ -482,6 +505,21 @@ class AAE_WGAN_GP(nn.Module):
             loss_mlp = loss + penalty + l2_reg + l1_reg
 
             loss_mlp.backward(retain_graph=True)
+
+            # if self.steps != 1:
+            #     for (p1,p2) in zip(self.generator.fc1_pos.parameters(), self.generator.fc1_neg.parameters()):
+            #         grads1, grads2 = p1.grad, p2.grad
+            #         if len(grads1.size()) > 1:
+            #             grads1[:, :self.data_variable_size].data.fill_(0)
+            #             grads2[:, :self.data_variable_size].data.fill_(0)
+            #             # grads1[:, :self.data_variable_size] *= 1e-20
+            #             # grads2[:, :self.data_variable_size] *= 1e-20
+            #         else:
+            #             grads1[:100].data.fill_(0)
+            #             grads2[:100].data.fill_(0)
+            #             # grads1[:100] *= 1e-20
+            #             # grads2[:100] *= 1e-20
+
             loss_mlp = optimizerG.step()
 
             ###############################################
@@ -496,6 +534,21 @@ class AAE_WGAN_GP(nn.Module):
 
             G_loss.append(loss_g.item())
             loss_g.backward()
+
+            # if self.steps != 1:
+            #     for (p1,p2) in zip(self.generator.fc1_pos.parameters(), self.generator.fc1_neg.parameters()):
+            #         grads1, grads2 = p1.grad, p2.grad
+            #         if len(grads1.size()) > 1:
+            #             grads1[:, :self.data_variable_size].data.fill_(0)
+            #             grads2[:, :self.data_variable_size].data.fill_(0)
+            #             # grads1[:, :self.data_variable_size] *= 1e-20
+            #             # grads2[:, :self.data_variable_size] *= 1e-20
+            #         else:
+            #             grads1[:100].data.fill_(0)
+            #             grads2[:100].data.fill_(0)
+            #             # grads1[:100] *= 1e-20
+            #             # grads2[:100] *= 1e-20
+
             loss_g = optimizerG.step()
 
             self.schedulerG.step()
@@ -505,7 +558,7 @@ class AAE_WGAN_GP(nn.Module):
             graph = self.generator.fc1_to_adj()
             graph[np.abs(graph) < self.graph_threshold] = 0
 
-            mse = F.mse_loss(fake_data, data.squeeze()).item()
+            mse = F.mse_loss(fake_data, data).item()
 
             if ground_truth_G != None:
                 fdr, tpr, fpr, shd, nnz = count_accuracy(
@@ -534,17 +587,17 @@ class AAE_WGAN_GP(nn.Module):
             mse_train.append(mse)
 
         if ground_truth_G != None:
-
-            print(
-                "Epoch: {:04d}".format(epoch),
-                "D_loss: {:.10f}".format(np.mean(D_loss)),
-                "G_loss: {:.10f}".format(np.mean(G_loss)),
-                "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
-                "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
-                "mse_train: {:.10f}".format(np.mean(mse_train)),
-                "shd_trian: {:.10f}".format(np.mean(shd_trian)),
-                "time: {:.4f}s".format(time.time() - t),
-            )
+            if self.verbose:
+                print(
+                    "Epoch: {:04d}".format(epoch),
+                    "D_loss: {:.10f}".format(np.mean(D_loss)),
+                    "G_loss: {:.10f}".format(np.mean(G_loss)),
+                    "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
+                    "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
+                    "mse_train: {:.10f}".format(np.mean(mse_train)),
+                    "shd_trian: {:.10f}".format(np.mean(shd_trian)),
+                    "time: {:.4f}s".format(time.time() - t),
+                )
 
             return (
                 np.mean(D_loss),
@@ -560,16 +613,16 @@ class AAE_WGAN_GP(nn.Module):
                 best_epoch,
             )  # , origin_A
         else:
-
-            print(
-                "Epoch: {:04d}".format(epoch),
-                "D_loss: {:.10f}".format(np.mean(D_loss)),
-                "G_loss: {:.10f}".format(np.mean(G_loss)),
-                "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
-                "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
-                "mse_train: {:.10f}".format(np.mean(mse_train)),
-                "time: {:.4f}s".format(time.time() - t),
-            )
+            if self.verbose:
+                print(
+                    "Epoch: {:04d}".format(epoch),
+                    "D_loss: {:.10f}".format(np.mean(D_loss)),
+                    "G_loss: {:.10f}".format(np.mean(G_loss)),
+                    "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
+                    "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
+                    "mse_train: {:.10f}".format(np.mean(mse_train)),
+                    "time: {:.4f}s".format(time.time() - t),
+                )
 
             return (
                 np.mean(D_loss),
@@ -578,6 +631,11 @@ class AAE_WGAN_GP(nn.Module):
                 np.mean(MMD_loss),
                 np.mean(mse_train),
                 graph,
+                best_shd,
+                best_shd_graph,
+                best_mse_loss,
+                best_mse_data,
+                best_epoch,
             )  # , origin_A
 
     def fit(self, train_loader, ground_truth_G=None):
@@ -599,6 +657,7 @@ class AAE_WGAN_GP(nn.Module):
                 Generator(
                     self.batch_size,
                     self.z_dims,
+                    self.x_dims,
                     dims=[self.data_variable_size, 10, 1],
                     device=self.device,
                     bias=True,
@@ -670,14 +729,20 @@ class AAE_WGAN_GP(nn.Module):
                             self.optimizerD,
                         )
 
-                    print("Optimization Finished!")
-                    print("Best Epoch: {:04d}".format(best_epoch))
-                    print("Best SHD: {:04d}".format(best_shd))
-                    print("Best MSE Loss: {:.10f}".format(best_MSE_loss))
-                    # print("Best SHD Graph:")
-                    # print(best_shd_graph)
-                    # print("Best MSE Data:")
-                    # print(best_MSE_data)
+                    if self.verbose:
+                        if ground_truth_G != None:
+                            print("Optimization Finished!")
+                            print("Best Epoch: {:04d}".format(best_epoch))
+                            print("Best SHD: {:04d}".format(best_shd))
+                            print("Best MSE Loss: {:.10f}".format(best_MSE_loss))
+                        else:
+                            print("Optimization Finished!")
+                            print("Best Epoch: {:04d}".format(best_epoch))
+                            print("Best MSE Loss: {:.10f}".format(best_MSE_loss))
+                        # print("Best SHD Graph:")
+                        # print(best_shd_graph)
+                        # print("Best MSE Data:")
+                        # print(best_MSE_data)
 
                     # update parameters
                     with torch.no_grad():
@@ -854,6 +919,7 @@ class AAE_WGAN_GP(nn.Module):
             Generator(
                 self.batch_size,
                 self.z_dims,
+                self.x_dims,
                 dims=[self.data_variable_size, 10, 1],
                 device=self.device,
                 bias=True,
