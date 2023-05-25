@@ -60,6 +60,12 @@ parser.add_argument(
     help="Number of steps for the discriminator",
 )
 parser.add_argument(
+    "--csl_steps",
+    type=int,
+    default=1,
+    help="Number of steps for the causal structure learning",
+)
+parser.add_argument(
     "--initial_identifier",
     type=str,
     default="",
@@ -72,10 +78,13 @@ parser.add_argument(
     help="Number of rows in the sampled dataframe",
 )
 parser.add_argument(
-    "--save_model", default="", type=str, help="A directory to save a trained model to."
+    "--save_directory",
+    default="",
+    type=str,
+    help="A directory to save a trained model to.",
 )
 parser.add_argument(
-    "--load_model",
+    "--load_directory",
     default="",
     type=str,
     help="A directory to load a trained model from.",
@@ -96,7 +105,7 @@ parser.add_argument(
 # -----------data parameters ------
 # configurations
 parser.add_argument(
-    "--synthesize", type=int, default=1, help="Flag for synthesing synthetic data"
+    "--synthesize", type=int, default=0, help="Flag for synthesing synthetic data"
 )
 parser.add_argument(
     "--pns", type=int, default=1, help="Flag for primary neighbour selection"
@@ -229,7 +238,7 @@ parser.add_argument(
     "--mul2", default=0.01, type=float, help="multiplier for the L2_Loss"
 )
 parser.add_argument(
-    "--alpha", default=0.01, type=float, help="alpha multiplier for the MMD"
+    "--alpha", default=2, type=float, help="alpha multiplier for the MMD"
 )
 
 parser.add_argument(

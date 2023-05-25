@@ -107,7 +107,7 @@ class Discriminator(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, n, m, x_dims, dims, device, bias=True):
+    def __init__(self, n, m, x_dims, dims, device, step=1, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
@@ -117,6 +117,7 @@ class Generator(nn.Module):
         self.n = n
         self.x_dims = x_dims
         self.device = device
+        self.step = step
         # fc1: variable splitting for l1
         self.fc1_pos = nn.Linear(self.d, self.d * dims[1], bias=bias)
         self.fc1_neg = nn.Linear(self.d, self.d * dims[1], bias=bias)
@@ -125,9 +126,18 @@ class Generator(nn.Module):
         # fc2: local linear layers
         layers = []
         for l in range(len(dims) - 2):
-            layers.append(
-                LocallyConnected(self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias)
-            )
+
+            if self.step == 1:
+                current_layer = LocallyConnected(
+                    self.d, dims[l + 1], dims[l + 2], bias=bias
+                )
+            else:
+                current_layer = LocallyConnected(
+                    self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias
+                )
+
+            layers.append(current_layer)
+
         self.fc2 = nn.ModuleList(layers)
         self.init_weights()
 
@@ -162,16 +172,17 @@ class Generator(nn.Module):
             current_x = current_x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
             for fc in self.fc2:
                 current_x = torch.sigmoid(current_x)  # [n, d, m1]
-                z = (
-                    Variable(
-                        torch.FloatTensor(
-                            np.random.normal(0, 1, (self.n, self.d, self.m))
+                if self.step == 2:
+                    z = (
+                        Variable(
+                            torch.FloatTensor(
+                                np.random.normal(0, 1, (self.n, self.d, self.m))
+                            )
                         )
+                        .double()
+                        .to(self.device)
                     )
-                    .double()
-                    .to(self.device)
-                )
-                current_x = torch.cat((current_x, z), dim=2)
+                    current_x = torch.cat((current_x, z), dim=2)
                 current_x = fc(current_x)  # [n, d, m2]
             current_x = current_x.squeeze(dim=2)  # [n, d]
             if self.x_dims == 1:
@@ -313,6 +324,7 @@ class AAE_WGAN_GP(nn.Module):
         self.batch_size = args.batch_size
 
         self.discriminator_steps = args.discriminator_steps
+        self.csl_steps = args.csl_steps
         self.epochs = args.epochs
         self.lr = args.lr
 
@@ -347,8 +359,16 @@ class AAE_WGAN_GP(nn.Module):
         self.negative_slope = args.negative_slope
         self.dropout_rate = args.dropout_rate
 
+        self.save_directory = args.save_directory
+        self.load_directory = args.load_directory
+
+        self.step = 1
+
     def forward(self, inputs):
-        fake_data = self.generator(inputs)
+        if self.step == 1:
+            fake_data = self.MLP(inputs)
+        else:
+            fake_data = self.generator(inputs)
         return fake_data
 
     def update_optimizer(self, optimizer, original_lr, c_A):
@@ -394,7 +414,7 @@ class AAE_WGAN_GP(nn.Module):
         y_kernel = self.compute_kernel(y, y)
         xy_kernel = self.compute_kernel(x, y)
         mmd = x_kernel.mean() + y_kernel.mean() - 2 * xy_kernel.mean()
-        return (1 - self.alpha) * mmd
+        return self.alpha * mmd
 
     def squared_loss(self, output, target):
         n = target.shape[0]
@@ -413,6 +433,7 @@ class AAE_WGAN_GP(nn.Module):
         ground_truth_G,
         lambda_A,
         c_A,
+        optimizerMLP,
         optimizerG,
         optimizerD,
     ):
@@ -426,165 +447,154 @@ class AAE_WGAN_GP(nn.Module):
         shd_trian = []
 
         # update optimizer
+        optimizerMLP, lr = self.update_optimizer(optimizerMLP, self.lr, c_A)
         optimizerG, lr = self.update_optimizer(optimizerG, self.lr, c_A)
         optimizerD, lr = self.update_optimizer(optimizerD, self.lr, c_A)
 
+        ###################################################################
+        # (1) Learn causal structure with original Notears-MLP model
+        ###################################################################
+
         for batch_idx, (data, relations) in enumerate(train_loader):
-            for n in range(self.discriminator_steps):
-                ###################################################################
-                # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
-                ###################################################################
+            for i in range(self.csl_steps):
 
                 data, relations = (
                     Variable(data.to(self.device)).double(),
                     Variable(relations.to(self.device)).double(),
                 )
 
-                if self.data_type != "synthetic":
-                    data = data.unsqueeze(2)
-
-                optimizerD.zero_grad()
+                optimizerMLP.zero_grad()
 
                 fake_data = self(data)
 
-                y_fake = self.discriminator(fake_data)
+                loss = self.squared_loss(fake_data, data)
 
-                y_real = self.discriminator(data)
+                h_A = self.MLP.h_func()
 
-                if self.x_dims > 1:
-                    # vector case
-                    pen = self.discriminator.calc_gradient_penalty(
-                        data.view(-1, data.size(1) * data.size(2)),
-                        fake_data.view(-1, fake_data.size(1) * fake_data.size(2)),
-                        self.device,
-                    )
-                    loss_d = -(
-                        torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake))
-                    )
-                else:
-                    # normal continious and discrete data case
-                    pen = self.discriminator.calc_gradient_penalty(
-                        data, fake_data, self.device
-                    )
-                    loss_d = -(
-                        torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake))
-                    )
+                penalty = lambda_A * h_A + 0.5 * c_A * h_A * h_A
 
-                Pen_loss.append(pen.item())
-                pen.backward(retain_graph=True)
+                l2_reg = 0.5 * self.mul2 * self.MLP.l2_reg()
+                l1_reg = self.mul1 * self.MLP.fc1_l1_reg()
 
-                D_loss.append(loss_d.item())
-                loss_d.backward()
-                loss_d = optimizerD.step()
+                loss_mlp = loss + penalty + l2_reg + l1_reg
 
-            ###############################################
-            # (2) Update MLP network: with square loss
-            ###############################################
+                loss_mlp.backward(retain_graph=True)
+
+                loss_mlp = optimizerMLP.step()
+
+        ###################################################################
+        # (2) Produce diverse samples using the WGAN architecture
+        ###################################################################
+
+        self.step = 2
+
+        with torch.no_grad():
+            self.generator.fc1_pos.weight.copy_(self.MLP.fc1_pos.weight)
+            self.generator.fc1_neg.weight.copy_(self.MLP.fc1_neg.weight)
+
+        for n in range(self.discriminator_steps):
+
             data, relations = (
                 Variable(data.to(self.device)).double(),
                 Variable(relations.to(self.device)).double(),
             )
 
-            optimizerG.zero_grad()
+            if self.data_type != "synthetic":
+                data = data.unsqueeze(2)
 
-            fake_data = self(data)
+            optimizerD.zero_grad()
 
-            loss_mmd = self.compute_mmd(fake_data, data)
+            fake_data_gen = self(data)
 
-            MMD_loss.append(loss_mmd.item())
+            y_fake = self.discriminator(fake_data_gen)
 
-            loss = self.squared_loss(fake_data, data) + loss_mmd
+            y_real = self.discriminator(data)
 
-            h_A = self.generator.h_func()
-
-            penalty = lambda_A * h_A + 0.5 * c_A * h_A * h_A
-
-            l2_reg = 0.5 * self.mul2 * self.generator.l2_reg()
-            l1_reg = self.mul1 * self.generator.fc1_l1_reg()
-
-            loss_mlp = loss + penalty + l2_reg + l1_reg
-
-            loss_mlp.backward(retain_graph=True)
-
-            # if self.steps != 1:
-            #     for (p1,p2) in zip(self.generator.fc1_pos.parameters(), self.generator.fc1_neg.parameters()):
-            #         grads1, grads2 = p1.grad, p2.grad
-            #         if len(grads1.size()) > 1:
-            #             grads1[:, :self.data_variable_size].data.fill_(0)
-            #             grads2[:, :self.data_variable_size].data.fill_(0)
-            #             # grads1[:, :self.data_variable_size] *= 1e-20
-            #             # grads2[:, :self.data_variable_size] *= 1e-20
-            #         else:
-            #             grads1[:100].data.fill_(0)
-            #             grads2[:100].data.fill_(0)
-            #             # grads1[:100] *= 1e-20
-            #             # grads2[:100] *= 1e-20
-
-            loss_mlp = optimizerG.step()
-
-            ###############################################
-            # (3) Update G network: maximize log(D(G(z)))
-            ###############################################
-
-            optimizerG.zero_grad()
-
-            y_fake = self.discriminator(fake_data.data.clone())
-
-            loss_g = -torch.mean(F.softplus(y_fake))
-
-            G_loss.append(loss_g.item())
-            loss_g.backward()
-
-            # if self.steps != 1:
-            #     for (p1,p2) in zip(self.generator.fc1_pos.parameters(), self.generator.fc1_neg.parameters()):
-            #         grads1, grads2 = p1.grad, p2.grad
-            #         if len(grads1.size()) > 1:
-            #             grads1[:, :self.data_variable_size].data.fill_(0)
-            #             grads2[:, :self.data_variable_size].data.fill_(0)
-            #             # grads1[:, :self.data_variable_size] *= 1e-20
-            #             # grads2[:, :self.data_variable_size] *= 1e-20
-            #         else:
-            #             grads1[:100].data.fill_(0)
-            #             grads2[:100].data.fill_(0)
-            #             # grads1[:100] *= 1e-20
-            #             # grads2[:100] *= 1e-20
-
-            loss_g = optimizerG.step()
-
-            self.schedulerG.step()
-            self.schedulerD.step()
-
-            # compute metrics
-            graph = self.generator.fc1_to_adj()
-            graph[np.abs(graph) < self.graph_threshold] = 0
-
-            mse = F.mse_loss(fake_data, data).item()
-
-            if ground_truth_G != None:
-                fdr, tpr, fpr, shd, nnz = count_accuracy(
-                    ground_truth_G, nx.DiGraph(graph)
+            if self.x_dims > 1:
+                # vector case
+                pen = self.discriminator.calc_gradient_penalty(
+                    data.view(-1, data.size(1) * data.size(2)),
+                    fake_data_gen.view(
+                        -1, fake_data_gen.size(1) * fake_data_gen.size(2)
+                    ),
+                    self.device,
                 )
-                shd_trian.append(shd)
-
-                if best_shd == np.inf and best_mse_loss == np.inf:
-                    best_shd = shd
-                    best_mse_loss = mse
-                elif shd < best_shd:
-                    best_shd = shd
-                    best_shd_graph = graph
-                    best_mse_loss = np.inf
-                elif shd == best_shd and mse < best_mse_loss:
-                    best_mse_loss = mse
-                    best_mse_data = fake_data
-                    best_epoch = epoch
+                loss_d = -(
+                    torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake))
+                )
             else:
-                if best_mse_loss == np.inf:
-                    best_mse_loss = mse
-                elif mse < best_mse_loss:
-                    best_mse_loss = mse
-                    best_mse_data = fake_data
+                # normal continious and discrete data case
+                pen = self.discriminator.calc_gradient_penalty(
+                    data, fake_data_gen, self.device
+                )
+                loss_d = -(
+                    torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake))
+                )
 
-            mse_train.append(mse)
+            Pen_loss.append(pen.item())
+            pen.backward(retain_graph=True)
+
+            D_loss.append(loss_d.item())
+            loss_d.backward()
+            loss_d = optimizerD.step()
+
+        optimizerG.zero_grad()
+
+        data, relations = (
+            Variable(data.to(self.device)).double(),
+            Variable(relations.to(self.device)).double(),
+        )
+
+        if self.data_type != "synthetic":
+            data = data.unsqueeze(2)
+
+        fake_data_gen = self(data)
+
+        y_fake = self.discriminator(fake_data_gen)
+
+        loss_g = -torch.mean(F.softplus(y_fake))
+
+        G_loss.append(loss_g.item())
+        loss_g.backward()
+
+        loss_g = optimizerG.step()
+
+        self.step = 1
+
+        self.schedulerMLP.step()
+        self.schedulerG.step()
+        self.schedulerD.step()
+
+        # compute metrics
+        graph = self.MLP.fc1_to_adj()
+        graph[np.abs(graph) < self.graph_threshold] = 0
+
+        mse = F.mse_loss(fake_data, data).item()
+
+        if ground_truth_G != None:
+            fdr, tpr, fpr, shd, nnz = count_accuracy(ground_truth_G, nx.DiGraph(graph))
+            shd_trian.append(shd)
+
+            if best_shd == np.inf and best_mse_loss == np.inf:
+                best_shd = shd
+                best_mse_loss = mse
+            elif shd < best_shd:
+                best_shd = shd
+                best_shd_graph = graph
+                best_mse_loss = np.inf
+            elif shd == best_shd and mse < best_mse_loss:
+                best_mse_loss = mse
+                best_mse_data = fake_data_gen
+                best_epoch = epoch
+                self.save_model()
+        else:
+            if best_mse_loss == np.inf:
+                best_mse_loss = mse
+            elif mse < best_mse_loss:
+                best_mse_loss = mse
+                best_mse_data = fake_data_gen
+
+        mse_train.append(mse)
 
         if ground_truth_G != None:
             if self.verbose:
@@ -593,7 +603,6 @@ class AAE_WGAN_GP(nn.Module):
                     "D_loss: {:.10f}".format(np.mean(D_loss)),
                     "G_loss: {:.10f}".format(np.mean(G_loss)),
                     "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
-                    "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
                     "mse_train: {:.10f}".format(np.mean(mse_train)),
                     "shd_trian: {:.10f}".format(np.mean(shd_trian)),
                     "time: {:.4f}s".format(time.time() - t),
@@ -611,7 +620,7 @@ class AAE_WGAN_GP(nn.Module):
                 best_mse_loss,
                 best_mse_data,
                 best_epoch,
-            )  # , origin_A
+            )
         else:
             if self.verbose:
                 print(
@@ -619,7 +628,6 @@ class AAE_WGAN_GP(nn.Module):
                     "D_loss: {:.10f}".format(np.mean(D_loss)),
                     "G_loss: {:.10f}".format(np.mean(G_loss)),
                     "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
-                    "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
                     "mse_train: {:.10f}".format(np.mean(mse_train)),
                     "time: {:.4f}s".format(time.time() - t),
                 )
@@ -636,9 +644,23 @@ class AAE_WGAN_GP(nn.Module):
                 best_mse_loss,
                 best_mse_data,
                 best_epoch,
-            )  # , origin_A
+            )
 
     def fit(self, train_loader, ground_truth_G=None):
+
+        if not hasattr(self, "MLP"):
+            self.MLP = (
+                Generator(
+                    self.batch_size,
+                    self.z_dims,
+                    self.x_dims,
+                    dims=[self.data_variable_size, 10, 1],
+                    device=self.device,
+                    bias=True,
+                )
+                .double()
+                .to(self.device)
+            )
 
         if not hasattr(self, "discriminator"):
             self.discriminator = (
@@ -660,11 +682,15 @@ class AAE_WGAN_GP(nn.Module):
                     self.x_dims,
                     dims=[self.data_variable_size, 10, 1],
                     device=self.device,
+                    step=2,
                     bias=True,
                 )
                 .double()
                 .to(self.device)
             )
+
+        if not hasattr(self, "optimizerMLP"):
+            self.optimizerMLP = optim.Adam(self.MLP.parameters(), lr=self.lr)
 
         if not hasattr(self, "optimizerD"):
             self.optimizerD = optim.Adam(
@@ -675,7 +701,12 @@ class AAE_WGAN_GP(nn.Module):
             )
 
         if not hasattr(self, "optimizerG"):
-            self.optimizerG = optim.Adam(self.generator.parameters(), lr=self.lr)
+            self.optimizerG = optim.Adam(self.generator.fc2.parameters(), lr=self.lr)
+
+        if not hasattr(self, "schedulerMLP"):
+            self.schedulerMLP = lr_scheduler.StepLR(
+                self.optimizerMLP, step_size=self.lr_decay, gamma=self.gamma
+            )
 
         if not hasattr(self, "schedulerG"):
             self.schedulerG = lr_scheduler.StepLR(
@@ -725,6 +756,7 @@ class AAE_WGAN_GP(nn.Module):
                             ground_truth_G,
                             self.lambda_A,
                             self.c_A,
+                            self.optimizerMLP,
                             self.optimizerG,
                             self.optimizerD,
                         )
@@ -902,6 +934,9 @@ class AAE_WGAN_GP(nn.Module):
             self.save_directory != ""
         ), "Saving directory not specified! Please specify a saving directory!"
         torch.save(
+            self.MLP.state_dict(), os.path.join(self.save_directory, "MLP.pth"),
+        )
+        torch.save(
             self.generator.state_dict(),
             os.path.join(self.save_directory, "generator.pth"),
         )
@@ -915,6 +950,19 @@ class AAE_WGAN_GP(nn.Module):
             self.load_directory != ""
         ), "Loading directory not specified! Please specify a loading directory!"
 
+        MLP = (
+            Generator(
+                self.batch_size,
+                self.z_dims,
+                self.x_dims,
+                dims=[self.data_variable_size, 10, 1],
+                device=self.device,
+                bias=True,
+            )
+            .double()
+            .to(self.device)
+        )
+
         generator = (
             Generator(
                 self.batch_size,
@@ -922,6 +970,7 @@ class AAE_WGAN_GP(nn.Module):
                 self.x_dims,
                 dims=[self.data_variable_size, 10, 1],
                 device=self.device,
+                step=2,
                 bias=True,
             )
             .double()
@@ -938,6 +987,7 @@ class AAE_WGAN_GP(nn.Module):
             .to(self.device)
         )
 
+        MLP.load_state_dict(torch.load(os.path.join(self.load_directory, "MLP.pth")))
         generator.load_state_dict(
             torch.load(os.path.join(self.load_directory, "generator.pth"))
         )
@@ -945,4 +995,4 @@ class AAE_WGAN_GP(nn.Module):
             torch.load(os.path.join(self.load_directory, "discriminator.pth"))
         )
 
-        return generator, discriminator
+        return MLP, generator, discriminator
