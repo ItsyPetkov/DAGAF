@@ -462,6 +462,9 @@ class AAE_WGAN_GP(nn.Module):
                     Variable(data.to(self.device)).double(),
                     Variable(relations.to(self.device)).double(),
                 )
+                
+                if self.data_type != "synthetic":
+                    data = data.unsqueeze(2)
 
                 optimizerMLP.zero_grad()
 
@@ -498,9 +501,6 @@ class AAE_WGAN_GP(nn.Module):
                 Variable(data.to(self.device)).double(),
                 Variable(relations.to(self.device)).double(),
             )
-
-            if self.data_type != "synthetic":
-                data = data.unsqueeze(2)
 
             optimizerD.zero_grad()
 
@@ -544,9 +544,6 @@ class AAE_WGAN_GP(nn.Module):
             Variable(data.to(self.device)).double(),
             Variable(relations.to(self.device)).double(),
         )
-
-        if self.data_type != "synthetic":
-            data = data.unsqueeze(2)
 
         fake_data_gen = self(data)
 
