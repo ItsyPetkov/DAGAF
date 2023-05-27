@@ -462,7 +462,7 @@ class AAE_WGAN_GP(nn.Module):
                     Variable(data.to(self.device)).double(),
                     Variable(relations.to(self.device)).double(),
                 )
-                
+
                 if self.data_type != "synthetic":
                     data = data.unsqueeze(2)
 
@@ -470,7 +470,11 @@ class AAE_WGAN_GP(nn.Module):
 
                 fake_data = self(data)
 
-                loss = self.squared_loss(fake_data, data)
+                loss_mmd = self.compute_mmd(fake_data, data)
+
+                MMD_loss.append(loss_mmd.item())
+
+                loss = self.squared_loss(fake_data, data) + loss_mmd
 
                 h_A = self.MLP.h_func()
 
@@ -600,6 +604,7 @@ class AAE_WGAN_GP(nn.Module):
                     "D_loss: {:.10f}".format(np.mean(D_loss)),
                     "G_loss: {:.10f}".format(np.mean(G_loss)),
                     "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
+                    "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
                     "mse_train: {:.10f}".format(np.mean(mse_train)),
                     "shd_trian: {:.10f}".format(np.mean(shd_trian)),
                     "time: {:.4f}s".format(time.time() - t),
@@ -625,6 +630,7 @@ class AAE_WGAN_GP(nn.Module):
                     "D_loss: {:.10f}".format(np.mean(D_loss)),
                     "G_loss: {:.10f}".format(np.mean(G_loss)),
                     "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
+                    "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
                     "mse_train: {:.10f}".format(np.mean(mse_train)),
                     "time: {:.4f}s".format(time.time() - t),
                 )
