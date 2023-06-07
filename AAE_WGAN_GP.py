@@ -29,6 +29,7 @@ import numpy as np
 import networkx as nx
 import scipy.linalg as slin
 import os
+import pandas as pd
 
 from torch.autograd import Variable
 from torch import optim
@@ -931,6 +932,87 @@ class AAE_WGAN_GP(nn.Module):
                 "nnz",
                 nnz,
             )
+
+    def generateSyntheticData(
+        self, dims, generator, var_names, graph_threshold=0.05, device="cuda"
+    ):
+
+        batch_size, n_nodes, z_dim = dims[0], dims[1], dims[2]
+
+        generator.eval()
+        params = [p for p in generator.fc2.parameters()]
+        weights, biases = params[0], params[1]
+
+        A = generator.fc1_to_adj()
+        A[np.abs(A) < graph_threshold] = 0
+        G = nx.DiGraph(A)
+        ordered_vertices = list(nx.topological_sort(G))
+        assert len(ordered_vertices) == n_nodes
+        print("Ordered nodes: {}".format(ordered_vertices))
+
+        pred_X = torch.zeros((batch_size, n_nodes)).double().to(device)
+        z = Variable(
+            torch.DoubleTensor(np.random.normal(0, 1, (batch_size, n_nodes, z_dim)))
+        ).to(device)
+
+        weights_dict, biases_dict = {}, {}
+
+        with torch.no_grad():
+            for i in range(n_nodes):
+                current_node = int(ordered_vertices[i])
+                weight = weights[current_node]
+                bias = biases[current_node]
+                # weights_dict[var_names[current_node]] = [w.detach().cpu().numpy() for w in weight]
+                # biases_dict[var_names[current_node]] = [b.detach().cpu().numpy() for b in biases]
+
+                h = generator.fc1_pos(pred_X) - generator.fc1_neg(pred_X)
+                h = h.view(-1, n_nodes, n_nodes)
+                h = torch.sigmoid(h)
+
+                h_node = h[:, current_node].unsqueeze(1)
+                z_node = z[:, current_node].unsqueeze(1)
+                cat_hz = torch.cat((h_node, z_node), dim=2)
+
+                out = cat_hz.unsqueeze(2) @ weight.unsqueeze(0).unsqueeze(0)
+                out = out.squeeze(2)
+                out += bias
+
+                pred_X[:, current_node] = out.squeeze()
+
+        return pred_X
+
+    def sample(self, train_loader, columns=None):
+
+        real_tensor_data = train_loader.dataset.tensors[0].squeeze()
+        real_df = pd.DataFrame(real_tensor_data.numpy(), columns=columns)
+        real_df["data"] = "real"
+
+        weights = "./generator.pth"
+        n_synth = real_df.shape[0]
+        num_nodes = real_df.shape[1] - 1
+
+        generator = (
+            Generator(
+                n_synth,
+                1,
+                dims=[num_nodes, num_nodes, 1],
+                device=self.device,
+                bias=True,
+            )
+            .double()
+            .to(self.device)
+        )
+        generator.load_state_dict(torch.load(weights))
+        generator.eval()
+
+        synthetic_data = self.generateSyntheticData(
+            dims=[n_synth, num_nodes, 1], generator=generator
+        )
+
+        fake_df = pd.DataFrame(synthetic_data.cpu().numpy(), columns=columns)
+        fake_df["data"] = "fake"
+
+        return fake_df
 
     def save_model(self):
         assert (
