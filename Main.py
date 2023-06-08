@@ -105,7 +105,7 @@ parser.add_argument(
 # -----------data parameters ------
 # configurations
 parser.add_argument(
-    "--synthesize", type=int, default=0, help="Flag for synthesing synthetic data"
+    "--synthesize", type=int, default=1, help="Flag for synthesing synthetic data"
 )
 parser.add_argument(
     "--pns", type=int, default=1, help="Flag for primary neighbour selection"

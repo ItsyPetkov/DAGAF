@@ -721,7 +721,7 @@ def load_data(args, batch_size=1000, suffix="", debug=False):
         # create your own version of benchmark discrete data
         assert args.path != "", "Data path must be specified"
         file_path_dataset = os.path.join(
-            args.path, "pathfinder_5000.txt"
+            args.path, "child_5000.txt"
         )  # e.g for pathfinder benchmark dataset it should be something like pathfinder_5000.txt
 
         # read file
@@ -733,7 +733,7 @@ def load_data(args, batch_size=1000, suffix="", debug=False):
 
         # read ground truth graph
         file_path = os.path.join(
-            args.path, "pathfinder_graph.txt"
+            args.path, "child_graph.txt"
         )  # e.g for pathfinder benchmark dataset it should be somethiing like pathfinder_graph.txt
 
         graph = np.loadtxt(file_path, skiprows=0, dtype=np.int32)
