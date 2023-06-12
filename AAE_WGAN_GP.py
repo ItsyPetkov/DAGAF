@@ -410,7 +410,6 @@ class AAE_WGAN_GP(nn.Module):
         ground_truth_G,
         lambda_A,
         c_A,
-        optimizerD_csl,
         optimizerMLP,
         optimizerG,
         optimizerD,
@@ -425,7 +424,6 @@ class AAE_WGAN_GP(nn.Module):
         shd_trian = []
 
         # update optimizers
-        optimizerD_csl, lr = self.update_optimizer(optimizerD_csl, self.lr, c_A)
         optimizerMLP, lr = self.update_optimizer(optimizerMLP, self.lr, c_A)
         optimizerG, lr = self.update_optimizer(optimizerG, self.lr, c_A)
         optimizerD, lr = self.update_optimizer(optimizerD, self.lr, c_A)
@@ -437,51 +435,6 @@ class AAE_WGAN_GP(nn.Module):
             ###################################################################
 
             for i in range(self.csl_steps):
-                # for n in range(self.discriminator_steps):
-
-                #     data, relations = (
-                #         Variable(data.to(self.device)).double(),
-                #         Variable(relations.to(self.device)).double(),
-                #     )
-
-                #     if self.data_type != "synthetic":
-                #         data = data.unsqueeze(2)
-
-                #     optimizerD_csl.zero_grad()
-
-                #     fake_data = self(data)
-
-                #     y_fake = self.discriminator_csl(fake_data)
-
-                #     y_real = self.discriminator_csl(data)
-
-                #     if self.x_dims > 1:
-                #         # vector case
-                #         pen = self.discriminator_csl.calc_gradient_penalty(
-                #             data.view(-1, data.size(1) * data.size(2)),
-                #             fake_data.view(-1, fake_data.size(1) * fake_data.size(2)),
-                #             self.device,
-                #         )
-                #         loss_d = -(
-                #             torch.mean(F.softplus(y_real))
-                #             - torch.mean(F.softplus(y_fake))
-                #         )
-                #     else:
-                #         # normal continious and discrete data case
-                #         pen = self.discriminator_csl.calc_gradient_penalty(
-                #             data, fake_data, self.device
-                #         )
-                #         loss_d = -(
-                #             torch.mean(F.softplus(y_real))
-                #             - torch.mean(F.softplus(y_fake))
-                #         )
-
-                #     Pen_loss.append(pen.item())
-                #     pen.backward(retain_graph=True)
-
-                #     D_loss.append(loss_d.item())
-                #     loss_d.backward()
-                #     loss_d = optimizerD_csl.step()
 
                 data, relations = (
                     Variable(data.to(self.device)).double(),
@@ -584,7 +537,6 @@ class AAE_WGAN_GP(nn.Module):
                 # self.mlp.fc2.load_state_dict(self.generator.fc2.state_dict())
                 self.step = 1
 
-            self.schedulerD_csl.step()
             self.schedulerMLP.step()
             self.schedulerG.step()
             self.schedulerD.step()
@@ -676,18 +628,6 @@ class AAE_WGAN_GP(nn.Module):
 
     def fit(self, train_loader, ground_truth_G=None):
 
-        if not hasattr(self, "discriminator_csl"):
-            self.discriminator_csl = (
-                Discriminator(
-                    self.data_variable_size,
-                    (256, 256),
-                    self.negative_slope,
-                    self.dropout_rate,
-                )
-                .double()
-                .to(self.device)
-            )
-
         if not hasattr(self, "mlp"):
             self.mlp = (
                 Generator(
@@ -726,14 +666,6 @@ class AAE_WGAN_GP(nn.Module):
                 .to(self.device)
             )
 
-        if not hasattr(self, "optimizerD_csl"):
-            self.optimizerD_csl = optim.Adam(
-                self.discriminator_csl.parameters(),
-                lr=self.lr,
-                betas=(0.5, 0.9),
-                weight_decay=1e-6,
-            )
-
         if not hasattr(self, "optimizerMLP"):
             self.optimizerMLP = optim.Adam(self.mlp.parameters(), lr=self.lr)
 
@@ -747,11 +679,6 @@ class AAE_WGAN_GP(nn.Module):
 
         if not hasattr(self, "optimizerG"):
             self.optimizerG = optim.Adam(self.generator.fc2.parameters(), lr=self.lr)
-
-        if not hasattr(self, "schedulerD_csl"):
-            self.schedulerD_csl = lr_scheduler.StepLR(
-                self.optimizerD_csl, step_size=self.lr_decay, gamma=self.gamma
-            )
 
         if not hasattr(self, "schedulerMLP"):
             self.schedulerMLP = lr_scheduler.StepLR(
@@ -806,7 +733,6 @@ class AAE_WGAN_GP(nn.Module):
                             ground_truth_G,
                             self.lambda_A,
                             self.c_A,
-                            self.optimizerD_csl,
                             self.optimizerMLP,
                             self.optimizerG,
                             self.optimizerD,
