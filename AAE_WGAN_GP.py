@@ -108,7 +108,7 @@ class Discriminator(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, n, m, dims, device, bias=True):
+    def __init__(self, n, m, dims, device, step=1, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
@@ -117,6 +117,7 @@ class Generator(nn.Module):
         self.m = m
         self.n = n
         self.device = device
+        self.step = step
         # fc1: variable splitting for l1
         self.fc1_pos = nn.Linear(self.d, self.d * dims[1], bias=bias)
         self.fc1_neg = nn.Linear(self.d, self.d * dims[1], bias=bias)
@@ -125,9 +126,15 @@ class Generator(nn.Module):
         # fc2: local linear layers
         layers = []
         for l in range(len(dims) - 2):
-            layers.append(
-                LocallyConnected(self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias)
-            )
+            if self.step == 1:
+                current_layer = LocallyConnected(
+                    self.d, dims[l + 1], dims[l + 2], bias=bias
+                )
+            else:
+                current_layer = LocallyConnected(
+                    self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias
+                )
+            layers.append(current_layer)
         self.fc2 = nn.ModuleList(layers)
         self.init_weights()
 
@@ -158,14 +165,17 @@ class Generator(nn.Module):
         x = x.view(-1, self.dims[0], self.dims[1])  # [n, d, m1]
         for fc in self.fc2:
             x = torch.sigmoid(x)  # [n, d, m1]
-            z = (
-                Variable(
-                    torch.FloatTensor(np.random.normal(0, 1, (self.n, self.d, self.m)))
+            if self.step == 2:
+                z = (
+                    Variable(
+                        torch.FloatTensor(
+                            np.random.normal(0, 1, (self.n, self.d, self.m))
+                        )
+                    )
+                    .double()
+                    .to(self.device)
                 )
-                .double()
-                .to(self.device)
-            )
-            x = torch.cat((x, z), dim=2)
+                x = torch.cat((x, z), dim=2)
             x = fc(x)  # [n, d, m2]
         x = x.squeeze(dim=2)  # [n, d]
         return x
@@ -427,51 +437,51 @@ class AAE_WGAN_GP(nn.Module):
             ###################################################################
 
             for i in range(self.csl_steps):
-                for n in range(self.discriminator_steps):
+                # for n in range(self.discriminator_steps):
 
-                    data, relations = (
-                        Variable(data.to(self.device)).double(),
-                        Variable(relations.to(self.device)).double(),
-                    )
+                #     data, relations = (
+                #         Variable(data.to(self.device)).double(),
+                #         Variable(relations.to(self.device)).double(),
+                #     )
 
-                    if self.data_type != "synthetic":
-                        data = data.unsqueeze(2)
+                #     if self.data_type != "synthetic":
+                #         data = data.unsqueeze(2)
 
-                    optimizerD_csl.zero_grad()
+                #     optimizerD_csl.zero_grad()
 
-                    fake_data = self(data)
+                #     fake_data = self(data)
 
-                    y_fake = self.discriminator_csl(fake_data)
+                #     y_fake = self.discriminator_csl(fake_data)
 
-                    y_real = self.discriminator_csl(data)
+                #     y_real = self.discriminator_csl(data)
 
-                    if self.x_dims > 1:
-                        # vector case
-                        pen = self.discriminator_csl.calc_gradient_penalty(
-                            data.view(-1, data.size(1) * data.size(2)),
-                            fake_data.view(-1, fake_data.size(1) * fake_data.size(2)),
-                            self.device,
-                        )
-                        loss_d = -(
-                            torch.mean(F.softplus(y_real))
-                            - torch.mean(F.softplus(y_fake))
-                        )
-                    else:
-                        # normal continious and discrete data case
-                        pen = self.discriminator_csl.calc_gradient_penalty(
-                            data, fake_data, self.device
-                        )
-                        loss_d = -(
-                            torch.mean(F.softplus(y_real))
-                            - torch.mean(F.softplus(y_fake))
-                        )
+                #     if self.x_dims > 1:
+                #         # vector case
+                #         pen = self.discriminator_csl.calc_gradient_penalty(
+                #             data.view(-1, data.size(1) * data.size(2)),
+                #             fake_data.view(-1, fake_data.size(1) * fake_data.size(2)),
+                #             self.device,
+                #         )
+                #         loss_d = -(
+                #             torch.mean(F.softplus(y_real))
+                #             - torch.mean(F.softplus(y_fake))
+                #         )
+                #     else:
+                #         # normal continious and discrete data case
+                #         pen = self.discriminator_csl.calc_gradient_penalty(
+                #             data, fake_data, self.device
+                #         )
+                #         loss_d = -(
+                #             torch.mean(F.softplus(y_real))
+                #             - torch.mean(F.softplus(y_fake))
+                #         )
 
-                    Pen_loss.append(pen.item())
-                    pen.backward(retain_graph=True)
+                #     Pen_loss.append(pen.item())
+                #     pen.backward(retain_graph=True)
 
-                    D_loss.append(loss_d.item())
-                    loss_d.backward()
-                    loss_d = optimizerD_csl.step()
+                #     D_loss.append(loss_d.item())
+                #     loss_d.backward()
+                #     loss_d = optimizerD_csl.step()
 
                 data, relations = (
                     Variable(data.to(self.device)).double(),
@@ -497,18 +507,17 @@ class AAE_WGAN_GP(nn.Module):
 
                 loss_mlp = loss + penalty + l2_reg + l1_reg
 
-                loss_mlp.backward(retain_graph=True)
+                loss_mlp.backward()
                 loss_mlp = optimizerMLP.step()
 
             ###################################################################
             # (2) Produce diverse samples using the WGAN architecture
             ###################################################################
 
-            self.step = 2
-
             with torch.no_grad():
                 self.generator.fc1_pos.weight.copy_(self.mlp.fc1_pos.weight)
                 self.generator.fc1_neg.weight.copy_(self.mlp.fc1_neg.weight)
+                self.step = 2
 
             for n in range(self.discriminator_steps):
 
@@ -571,7 +580,9 @@ class AAE_WGAN_GP(nn.Module):
 
             loss_g = optimizerG.step()
 
-            self.step = 1
+            with torch.no_grad():
+                # self.mlp.fc2.load_state_dict(self.generator.fc2.state_dict())
+                self.step = 1
 
             self.schedulerD_csl.step()
             self.schedulerMLP.step()
@@ -701,7 +712,6 @@ class AAE_WGAN_GP(nn.Module):
                 .double()
                 .to(self.device)
             )
-
         if not hasattr(self, "generator"):
             self.generator = (
                 Generator(
@@ -709,6 +719,7 @@ class AAE_WGAN_GP(nn.Module):
                     self.z_dims,
                     dims=[self.data_variable_size, 10, 1],
                     device=self.device,
+                    step=2,
                     bias=True,
                 )
                 .double()
@@ -1055,10 +1066,6 @@ class AAE_WGAN_GP(nn.Module):
             self.save_directory != ""
         ), "Saving directory not specified! Please specify a saving directory!"
         torch.save(
-            self.discriminator_csl.state_dict(),
-            os.path.join(self.save_directory, "discriminator_csl.pth"),
-        )
-        torch.save(
             self.mlp.state_dict(), os.path.join(self.save_directory, "MLP.pth"),
         )
         torch.save(
@@ -1074,17 +1081,6 @@ class AAE_WGAN_GP(nn.Module):
         assert (
             self.load_directory != ""
         ), "Loading directory not specified! Please specify a loading directory!"
-
-        discriminator_csl = (
-            Discriminator(
-                self.data_variable_size,
-                (256, 256),
-                self.negative_slope,
-                self.dropout_rate,
-            )
-            .double()
-            .to(self.device)
-        )
 
         mlp = (
             Generator(
@@ -1123,9 +1119,6 @@ class AAE_WGAN_GP(nn.Module):
             .to(self.device)
         )
 
-        discriminator_csl.load_state_dict(
-            torch.load(os.path.join(self.load_directory, "discriminator_csl.pth"))
-        )
         mlp.load_state_dict(torch.load(os.path.join(self.load_directory, "MLP.pth")))
         generator.load_state_dict(
             torch.load(os.path.join(self.load_directory, "generator.pth"))
@@ -1134,4 +1127,4 @@ class AAE_WGAN_GP(nn.Module):
             torch.load(os.path.join(self.load_directory, "discriminator.pth"))
         )
 
-        return discriminator_csl, mlp, generator, discriminator
+        return mlp, generator, discriminator
