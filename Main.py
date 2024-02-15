@@ -148,7 +148,8 @@ parser.add_argument(
     "--graph_linear_type",
     type=str,
     default="nonlinear_2",
-    help="the synthetic data type: linear -> linear SEM, nonlinear_1 -> x=Acos(x+1)+z, nonlinear_2 -> x=2sin(A(x+0.5))+A(x+0.5)+z",
+    help="the synthetic data type: linear -> linear SEM, nonlinear_1 -> x=Acos(x+1)+z, nonlinear_2 -> x=2sin(A(x+0.5))+A(x+0.5)+z"
+    + 'post_nonlinear_1 -> x=tanh(Acos(x+1)+z), post_nonlinear_2 -> x=tanh(2sin(A(x+0.5))+A(x+0.5)+z)',
 )
 parser.add_argument(
     "--edge-types", type=int, default=2, help="The number of edge types to infer."
@@ -238,7 +239,7 @@ parser.add_argument(
     "--mul2", default=0.01, type=float, help="multiplier for the L2_Loss"
 )
 parser.add_argument(
-    "--alpha", default=2, type=float, help="alpha multiplier for the MMD"
+    "--alpha", default=0, type=float, help="alpha multiplier for the MMD"
 )
 
 parser.add_argument(
