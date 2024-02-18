@@ -108,6 +108,8 @@ class Discriminator(nn.Module):
 
 
 class Generator(nn.Module):
+    """Modified DAG-NOTEARS-MLP module."""
+
     def __init__(self, n, m, dims, device, graph_linear_type, step=1, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
@@ -119,11 +121,13 @@ class Generator(nn.Module):
         self.device = device
         self.step = step
         self.graph_linear_type = graph_linear_type
+
         # fc1: variable splitting for l1
         self.fc1_pos = nn.Linear(self.d, self.d * dims[1], bias=bias)
         self.fc1_neg = nn.Linear(self.d, self.d * dims[1], bias=bias)
         self.fc1_pos.weight.bounds = self._bounds()
         self.fc1_neg.weight.bounds = self._bounds()
+
         # fc2: local linear layers
         layers = []
         if "post" in self.graph_linear_type:
