@@ -105,7 +105,7 @@ parser.add_argument(
 # -----------data parameters ------
 # configurations
 parser.add_argument(
-    "--synthesize", type=int, default=1, help="Flag for synthesing synthetic data"
+    "--synthesize", type=int, default=0, help="Flag for synthesing synthetic data"
 )
 parser.add_argument(
     "--pns", type=int, default=1, help="Flag for primary neighbour selection"
@@ -147,7 +147,7 @@ parser.add_argument(
 parser.add_argument(
     "--graph_linear_type",
     type=str,
-    default="nonlinear_2",
+    default="post_nonlinear_2",
     help="the synthetic data type: linear -> linear SEM, nonlinear_1 -> x=Acos(x+1)+z, nonlinear_2 -> x=2sin(A(x+0.5))+A(x+0.5)+z"
     + 'post_nonlinear_1 -> x=tanh(Acos(x+1)+z), post_nonlinear_2 -> x=tanh(2sin(A(x+0.5))+A(x+0.5)+z)',
 )

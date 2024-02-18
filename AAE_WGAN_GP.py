@@ -108,7 +108,7 @@ class Discriminator(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, n, m, dims, device, step=1, bias=True):
+    def __init__(self, n, m, dims, device, graph_linear_type, step=1, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
@@ -118,6 +118,7 @@ class Generator(nn.Module):
         self.n = n
         self.device = device
         self.step = step
+        self.graph_linear_type = graph_linear_type
         # fc1: variable splitting for l1
         self.fc1_pos = nn.Linear(self.d, self.d * dims[1], bias=bias)
         self.fc1_neg = nn.Linear(self.d, self.d * dims[1], bias=bias)
@@ -125,16 +126,28 @@ class Generator(nn.Module):
         self.fc1_neg.weight.bounds = self._bounds()
         # fc2: local linear layers
         layers = []
-        for l in range(len(dims) - 2):
-            if self.step == 1:
-                current_layer = LocallyConnected(
-                    self.d, dims[l + 1], dims[l + 2], bias=bias
-                )
-            else:
-                current_layer = LocallyConnected(
-                    self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias
-                )
-            layers.append(current_layer)
+        if "post" in self.graph_linear_type:
+            for l in range(len(dims) - 2):
+                if self.step == 1:
+                    current_layer = nn.Sequential(LocallyConnected(
+                        self.d, dims[l + 1], dims[l + 2], bias=bias
+                    ), nn.Sigmoid(), nn.Linear(dims[l + 2], dims[l + 2]))
+                else:
+                    current_layer = nn.Sequential(LocallyConnected(
+                        self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias
+                    ), nn.Sigmoid(), nn.Linear(dims[l + 2], dims[l + 2]))
+                layers.append(current_layer)
+        else:
+            for l in range(len(dims) - 2):
+                if self.step == 1:
+                    current_layer = LocallyConnected(
+                        self.d, dims[l + 1], dims[l + 2], bias=bias
+                    )
+                else:
+                    current_layer = LocallyConnected(
+                        self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias
+                    )
+                layers.append(current_layer)
         self.fc2 = nn.ModuleList(layers)
         self.init_weights()
 
@@ -198,8 +211,14 @@ class Generator(nn.Module):
         reg = 0.0
         fc1_weight = self.fc1_pos.weight - self.fc1_neg.weight  # [j * m1, i]
         reg += torch.sum(fc1_weight ** 2)
-        for fc in self.fc2:
-            reg += torch.sum(fc.weight ** 2)
+        if 'post' in str(self.graph_linear_type):
+            for fc in self.fc2:
+                for f in fc:
+                    if type(f) != nn.Sigmoid: 
+                        reg += torch.sum(f.weight ** 2)
+        else:
+            for fc in self.fc2:
+                reg += torch.sum(fc.weight ** 2)
         return reg
 
     def fc1_l1_reg(self):
@@ -273,7 +292,7 @@ class LocallyConnected(nn.Module):
         # (Optional)Set the extra information about this module. You can test
         # it by printing an object of this class.
         return "num_linear={}, in_features={}, out_features={}, bias={}".format(
-            self.num_linear, self.in_features, self.out_features, self.bias is not None
+            self.num_linear, self.input_features, self.output_features, self.bias is not None
         )
 
 
@@ -346,6 +365,7 @@ class AAE_WGAN_GP(nn.Module):
 
         self.save_directory = args.save_directory
         self.load_directory = args.load_directory
+        self.graph_linear_type = args.graph_linear_type
 
         self.step = 1
 
@@ -429,7 +449,6 @@ class AAE_WGAN_GP(nn.Module):
         optimizerD, lr = self.update_optimizer(optimizerD, self.lr, c_A)
 
         for batch_idx, (data, relations) in enumerate(train_loader):
-
             ###################################################################
             # (1) Learn causal structure with original Notears-MLP model
             ###################################################################
@@ -635,6 +654,7 @@ class AAE_WGAN_GP(nn.Module):
                     self.z_dims,
                     dims=[self.data_variable_size, 10, 1],
                     device=self.device,
+                    graph_linear_type=self.graph_linear_type,
                     bias=True,
                 )
                 .double()
@@ -659,6 +679,7 @@ class AAE_WGAN_GP(nn.Module):
                     self.z_dims,
                     dims=[self.data_variable_size, 10, 1],
                     device=self.device,
+                    graph_linear_type=self.graph_linear_type,
                     step=2,
                     bias=True,
                 )
