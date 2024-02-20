@@ -436,7 +436,9 @@ class AAE_WGAN_GP(nn.Module):
         c_A,
         optimizerMLP,
         optimizerG,
+        optimizerG1,
         optimizerD,
+        optimizerD1
     ):
         """training algorithm for a single epoch"""
         t = time.time()
@@ -450,7 +452,9 @@ class AAE_WGAN_GP(nn.Module):
         # update optimizers
         optimizerMLP, lr = self.update_optimizer(optimizerMLP, self.lr, c_A)
         optimizerG, lr = self.update_optimizer(optimizerG, self.lr, c_A)
+        optimizerG1, lr = self.update_optimizer(optimizerG1, self.lr, c_A)
         optimizerD, lr = self.update_optimizer(optimizerD, self.lr, c_A)
+        optimizerD1, lr = self.update_optimizer(optimizerD1, self.lr, c_A)
 
         for batch_idx, (data, relations) in enumerate(train_loader):
             ###################################################################
@@ -458,6 +462,51 @@ class AAE_WGAN_GP(nn.Module):
             ###################################################################
 
             for i in range(self.csl_steps):
+                for n in range(self.discriminator_steps):
+
+                    data, relations = (
+                        Variable(data.to(self.device)).double(),
+                        Variable(relations.to(self.device)).double(),
+                    )
+
+                    if self.data_type != "synthetic":
+                        data = data.unsqueeze(2)
+
+                    optimizerD1.zero_grad()
+
+                    fake_data = self(data)
+
+                    y_fake = self.discriminator1(fake_data)
+
+                    y_real = self.discriminator1(data)
+
+                    if self.x_dims > 1:
+                        # vector case
+                        pen = self.discriminator1.calc_gradient_penalty(
+                            data.view(-1, data.size(1) * data.size(2)),
+                            fake_data.view(-1, fake_data.size(1) * fake_data.size(2)),
+                            self.device,
+                        )
+                        loss_d = -(
+                            torch.mean(F.softplus(y_real))
+                            - torch.mean(F.softplus(y_fake))
+                        )
+                    else:
+                        # normal continious and discrete data case
+                        pen = self.discriminator1.calc_gradient_penalty(
+                            data, fake_data, self.device
+                        )
+                        loss_d = -(
+                            torch.mean(F.softplus(y_real))
+                            - torch.mean(F.softplus(y_fake))
+                        )
+
+                    Pen_loss.append(pen.item())
+                    pen.backward(retain_graph=True)
+
+                    D_loss.append(loss_d.item())
+                    loss_d.backward()
+                    loss_d = optimizerD1.step()
 
                 data, relations = (
                     Variable(data.to(self.device)).double(),
@@ -483,8 +532,16 @@ class AAE_WGAN_GP(nn.Module):
 
                 loss_mlp = loss + penalty + l2_reg + l1_reg
 
-                loss_mlp.backward()
+                loss_mlp.backward(retain_graph=True)
                 loss_mlp = optimizerMLP.step()
+
+                optimizerMLP.zero_grad()
+
+                y_fake = self.discriminator1(fake_data.data.clone())
+
+                loss_g = -torch.mean(y_fake)
+                loss_g.backward()
+                loss_g = optimizerMLP.step()
 
             ###################################################################
             # (2) Produce diverse samples using the WGAN architecture
@@ -562,7 +619,9 @@ class AAE_WGAN_GP(nn.Module):
 
             self.schedulerMLP.step()
             self.schedulerG.step()
+            self.schedulerG1.step()
             self.schedulerD.step()
+            self.schedulerD1.step()
 
             # compute metrics
             graph = self.mlp.fc1_to_adj()
@@ -676,6 +735,19 @@ class AAE_WGAN_GP(nn.Module):
                 .double()
                 .to(self.device)
             )
+
+        if not hasattr(self, "discriminator1"):
+            self.discriminator1 = (
+                Discriminator(
+                    self.data_variable_size,
+                    (256, 256),
+                    self.negative_slope,
+                    self.dropout_rate,
+                )
+                .double()
+                .to(self.device)
+            )
+
         if not hasattr(self, "generator"):
             self.generator = (
                 Generator(
@@ -702,6 +774,17 @@ class AAE_WGAN_GP(nn.Module):
                 weight_decay=1e-6,
             )
 
+        if not hasattr(self, "optimizerD1"):
+            self.optimizerD1 = optim.Adam(
+                self.discriminator.parameters(),
+                lr=self.lr,
+                betas=(0.5, 0.9),
+                weight_decay=1e-6,
+            )
+
+        if not hasattr(self, "optimizerG1"):
+            self.optimizerG1 = optim.Adam(self.mlp.parameters(), lr=self.lr)
+
         if not hasattr(self, "optimizerG"):
             self.optimizerG = optim.Adam(self.generator.fc2.parameters(), lr=self.lr)
 
@@ -715,9 +798,19 @@ class AAE_WGAN_GP(nn.Module):
                 self.optimizerD, step_size=self.lr_decay, gamma=self.gamma
             )
 
+        if not hasattr(self, "schedulerD1"):
+            self.schedulerD1 = lr_scheduler.StepLR(
+                self.optimizerD1, step_size=self.lr_decay, gamma=self.gamma
+            )
+
         if not hasattr(self, "schedulerG"):
             self.schedulerG = lr_scheduler.StepLR(
                 self.optimizerG, step_size=self.lr_decay, gamma=self.gamma
+            )
+
+        if not hasattr(self, "schedulerG1"):
+            self.schedulerG1 = lr_scheduler.StepLR(
+                self.optimizerG1, step_size=self.lr_decay, gamma=self.gamma
             )
 
         best_ELBO_loss = np.inf
@@ -760,7 +853,9 @@ class AAE_WGAN_GP(nn.Module):
                             self.c_A,
                             self.optimizerMLP,
                             self.optimizerG,
+                            self.optimizerG1,
                             self.optimizerD,
+                            self.optimizerD1
                         )
 
                     if self.verbose:
