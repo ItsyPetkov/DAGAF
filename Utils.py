@@ -273,7 +273,7 @@ def gumbel_softmax(logits, tau=1, hard=False, eps=1e-10):
 # https://causalnex.readthedocs.io/en/latest/03_tutorial/plotting_tutorial.html
 def draw_dag(graph, data_type, columns=None):
 
-    final_DAG = from_numpy_matrix(graph, create_using=nx.DiGraph)
+    final_DAG = from_numpy_array(graph, create_using=nx.DiGraph)
 
     if data_type == "real":
         final_DAG = nx.relabel_nodes(

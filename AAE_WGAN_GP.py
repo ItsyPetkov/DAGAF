@@ -35,10 +35,11 @@ from torch.autograd import Variable
 from torch import optim
 from torch.optim import lr_scheduler
 from torch.nn import Linear, Sequential, LeakyReLU, Dropout, BatchNorm1d
-from Utils import preprocess_adj_new, preprocess_adj_new1
-from Utils import nll_gaussian, kl_gaussian_sem, nll_catogrical
-from Utils import _h_A
-from Utils import count_accuracy
+#from Utils import preprocess_adj_new, preprocess_adj_new1
+#from Utils import nll_gaussian, kl_gaussian_sem, nll_catogrical
+#from Utils import _h_A
+#from Utils import count_accuracy
+from torch.utils.data import DataLoader
 
 
 class Discriminator(nn.Module):
@@ -106,54 +107,43 @@ class Discriminator(nn.Module):
         assert input.size()[0] % self.pac == 0
         return self.seq(input.view(-1, self.pacdim))
 
-
 class Generator(nn.Module):
-    """Modified DAG-NOTEARS-MLP module."""
-
-    def __init__(self, n, m, dims, device, graph_linear_type, step=1, bias=True):
+    def __init__(self, dims,  step=1, bias=True):
         super(Generator, self).__init__()
         assert len(dims) >= 2
         assert dims[-1] == 1
-        self.d = dims[0]
+        d = dims[0]
         self.dims = dims
-        self.m = m
-        self.n = n
-        self.device = device
         self.step = step
-        self.graph_linear_type = graph_linear_type
 
         # fc1: variable splitting for l1
-        self.fc1_pos = nn.Linear(self.d, self.d * dims[1], bias=bias)
-        self.fc1_neg = nn.Linear(self.d, self.d * dims[1], bias=bias)
+        self.fc1_pos = nn.Linear(d, d * dims[1], bias=bias)
+        self.fc1_neg = nn.Linear(d, d * dims[1], bias=bias)
         self.fc1_pos.weight.bounds = self._bounds()
         self.fc1_neg.weight.bounds = self._bounds()
 
         # fc2: local linear layers
         layers = []
-        if "post" in self.graph_linear_type:
-            for l in range(len(dims) - 2):
-                if self.step == 1:
-                    current_layer = nn.Sequential(LocallyConnected(
-                        self.d, dims[l + 1], dims[l + 2], bias=bias
-                    ), nn.Sigmoid(), nn.Linear(dims[l + 2], dims[l + 2]))
-                else:
-                    current_layer = nn.Sequential(LocallyConnected(
-                        self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias
-                    ), nn.Sigmoid(), nn.Linear(dims[l + 2], dims[l + 2]))
-                layers.append(current_layer)
-        else:
-            for l in range(len(dims) - 2):
-                if self.step == 1:
-                    current_layer = LocallyConnected(
-                        self.d, dims[l + 1], dims[l + 2], bias=bias
-                    )
-                else:
-                    current_layer = LocallyConnected(
-                        self.d, dims[l + 1] + self.m, dims[l + 2], bias=bias
-                    )
-                layers.append(current_layer)
+        for l in range(len(dims) - 2):
+            if self.step == 1:
+                layers.append(LocallyConnected(d, dims[l + 1], dims[l + 2], bias=bias))
+            else:
+                layers.append(LocallyConnected(d, dims[l + 1]+1, dims[l + 2], bias=bias))
         self.fc2 = nn.ModuleList(layers)
         self.init_weights()
+
+    def _bounds(self):
+        d = self.dims[0]
+        bounds = []
+        for j in range(d):
+            for m in range(self.dims[1]):
+                for i in range(d):
+                    if i == j:
+                        bound = (0, 0)
+                    else:
+                        bound = (0, None)
+                    bounds.append(bound)
+        return bounds
 
     def init_weights(self):
         for m in self.modules():
@@ -183,15 +173,7 @@ class Generator(nn.Module):
         for fc in self.fc2:
             x = torch.sigmoid(x)  # [n, d, m1]
             if self.step == 2:
-                z = (
-                    Variable(
-                        torch.FloatTensor(
-                            np.random.normal(0, 1, (self.n, self.d, self.m))
-                        )
-                    )
-                    .double()
-                    .to(self.device)
-                )
+                z=Variable(torch.FloatTensor(np.random.normal(0, 1, (x.shape[0], x.shape[1], 1))))
                 x = torch.cat((x, z), dim=2)
             x = fc(x)  # [n, d, m2]
         x = x.squeeze(dim=2)  # [n, d]
@@ -212,17 +194,11 @@ class Generator(nn.Module):
 
     def l2_reg(self):
         """Take 2-norm-squared of all parameters"""
-        reg = 0.0
+        reg = 0.
         fc1_weight = self.fc1_pos.weight - self.fc1_neg.weight  # [j * m1, i]
         reg += torch.sum(fc1_weight ** 2)
-        if 'post' in str(self.graph_linear_type):
-            for fc in self.fc2:
-                for f in fc:
-                    if type(f) != nn.Sigmoid: 
-                        reg += torch.sum(f.weight ** 2)
-        else:
-            for fc in self.fc2:
-                reg += torch.sum(fc.weight ** 2)
+        for fc in self.fc2:
+            reg += torch.sum(fc.weight ** 2)
         return reg
 
     def fc1_l1_reg(self):
@@ -239,19 +215,21 @@ class Generator(nn.Module):
         A = torch.sum(fc1_weight * fc1_weight, dim=1).t()  # [i, j]
         W = torch.sqrt(A)  # [i, j]
         W = W.cpu().detach().numpy()  # [i, j]
-        return W
-
+        return W            
 
 class LocallyConnected(nn.Module):
     """Local linear layer, i.e. Conv1dLocal() with filter size 1.
+
     Args:
         num_linear: num of local linear layers, i.e.
         in_features: m1
         out_features: m2
         bias: whether to include bias or not
+
     Shape:
         - Input: [n, d, m1]
         - Output: [n, d, m2]
+
     Attributes:
         weight: [d, m1, m2]
         bias: [d, m2]
@@ -263,15 +241,15 @@ class LocallyConnected(nn.Module):
         self.input_features = input_features
         self.output_features = output_features
 
-        self.weight = nn.Parameter(
-            torch.Tensor(num_linear, input_features, output_features)
-        )
+        self.weight = nn.Parameter(torch.Tensor(num_linear,
+                                                input_features,
+                                                output_features))
         if bias:
             self.bias = nn.Parameter(torch.Tensor(num_linear, output_features))
         else:
             # You should always register all possible parameters, but the
             # optional ones can be None if you want.
-            self.register_parameter("bias", None)
+            self.register_parameter('bias', None)
 
         self.reset_parameters()
 
@@ -295,16 +273,16 @@ class LocallyConnected(nn.Module):
     def extra_repr(self):
         # (Optional)Set the extra information about this module. You can test
         # it by printing an object of this class.
-        return "num_linear={}, in_features={}, out_features={}, bias={}".format(
-            self.num_linear, self.input_features, self.output_features, self.bias is not None
+        return 'num_linear={}, in_features={}, out_features={}, bias={}'.format(
+            self.num_linear, self.input_features, self.output_features,
+            self.bias is not None
         )
-
 
 class TraceExpm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input):
         # detach so we can cast to NumPy
-        E = slin.expm(input.detach().cpu().numpy())
+        E = slin.expm(input.detach().numpy())
         f = np.trace(E)
         E = torch.from_numpy(E)
         ctx.save_for_backward(E)
@@ -313,13 +291,11 @@ class TraceExpm(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        (E,) = ctx.saved_tensors
+        E, = ctx.saved_tensors
         grad_input = grad_output * E.t()
-        return grad_input.to(device)
-
+        return grad_input
 
 trace_expm = TraceExpm.apply
-
 
 class AAE_WGAN_GP(nn.Module):
     """DAG-AAE model/framework."""
@@ -335,6 +311,7 @@ class AAE_WGAN_GP(nn.Module):
         self.discriminator_steps = args.discriminator_steps
         self.csl_steps = args.csl_steps
         self.epochs = args.epochs
+        self.epochs2 = args.epochs2
         self.lr = args.lr
 
         self.c_A = args.c_A
@@ -371,33 +348,12 @@ class AAE_WGAN_GP(nn.Module):
         self.load_directory = args.load_directory
         self.graph_linear_type = args.graph_linear_type
 
+        self.model = Generator(dims=[self.data_variable_size,10,1], bias=True)
+        self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
+        self.discriminator1 = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
+        self.generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
         self.step = 1
-
-    def forward(self, inputs):
-        if self.step == 1:
-            fake_data = self.mlp(inputs.squeeze())
-        else:
-            fake_data = self.generator(inputs.squeeze())
-        return fake_data
-
-    def update_optimizer(self, optimizer, original_lr, c_A):
-        """related LR to c_A, whenever c_A gets big, reduce LR proportionally"""
-        MAX_LR = 1e-2
-        MIN_LR = 1e-4
-
-        estimated_lr = original_lr / (math.log10(c_A) + 1e-10)
-        if estimated_lr > MAX_LR:
-            lr = MAX_LR
-        elif estimated_lr < MIN_LR:
-            lr = MIN_LR
-        else:
-            lr = estimated_lr
-
-        # set LR
-        for parame_group in optimizer.param_groups:
-            parame_group["lr"] = lr
-
-        return optimizer, lr
+        
 
     def compute_kernel(self, x, y):
         x_size = x.size(0)
@@ -416,619 +372,201 @@ class AAE_WGAN_GP(nn.Module):
         xy_kernel = self.compute_kernel(x, y)
         mmd = x_kernel.mean() + y_kernel.mean() - 2 * xy_kernel.mean()
         return (1 - self.alpha) * mmd
+    
+    def kl_gaussian_sem(self, logits):
+        mu = logits
+        kl_div = mu * mu
+        kl_sum = kl_div.sum()
+        return (kl_sum / (logits.size(0))) * 0.5
 
     def squared_loss(self, output, target):
         n = target.shape[0]
         loss = 0.5 / n * torch.sum((output - target) ** 2)
         return loss
+    
+    def dual_ascent_step(self, model, discriminator, generator, discriminator1, X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth=None):
+        """Perform one step of dual ascent in augmented Lagrangian."""
+        h_new = None
+        optimizer = optim.Adam(model.parameters(), lr=self.lr)
+        optimizerD = optim.Adam(discriminator.parameters(), lr=self.lr)
+        optimizerG = optim.Adam(generator.fc2.parameters(), lr=self.lr)
+        optimizerD1 = optim.Adam(discriminator1.parameters(), lr=self.lr)
+        while rho < rho_max:
+            for epoch in range(self.epochs):
+                t = time.time()
+                for batch_idx, (data, relations) in enumerate(X):
+                    for i in range(self.csl_steps):
+                        ###################################################################
+                        # (1) Learn causal structure with modified Notears-MLP model
+                        ###################################################################
+                        for n in range(self.discriminator_steps):
+                            ###################################################################
+                            # (1.1) Update D network: minimize ||D(x) - D(G(z))|| + GP
+                            ###################################################################
+                            data, relations = (Variable(data.squeeze()), Variable(relations))
+                            optimizerD.zero_grad()
+                            X_hat = model(data)
+                            y_fake = discriminator(X_hat)
+                            y_real = discriminator(data)
+                            pen = discriminator.calc_gradient_penalty(data, X_hat)
+                            loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
+                            pen.backward(retain_graph=True)
+                            loss_d.backward()
+                            optimizerD.step()
+                        ################################################################
+                        # (1.2) Update MLP network parameters with MSE + regularization
+                        ################################################################
+                        data, relations = (Variable(data.squeeze()), Variable(relations))
+                        optimizer.zero_grad()
+                        X_hat = model(data)
+                        kld_loss = self.kl_gaussian_sem(X_hat)
+                        mmd_loss = self.compute_mmd(X_hat, data.squeeze())
+                        loss = self.squared_loss(X_hat, data) + kld_loss + mmd_loss
+                        h_val = model.h_func()
+                        penalty = 0.5 * rho * h_val * h_val + alpha * h_val
+                        l2_reg = 0.5 * lambda2 * model.l2_reg()
+                        l1_reg = lambda1 * model.fc1_l1_reg()
+                        primal_obj = loss + penalty + l2_reg + l1_reg
+                        primal_obj.backward(retain_graph=True)
+                        optimizer.step()
+                        ###############################################
+                        # (1.3) Update G network: maximize -D(G(z))
+                        ###############################################
+                        optimizer.zero_grad()
+                        y_fake = discriminator(X_hat.data.clone())
+                        loss_g = -torch.mean(y_fake)
+                        loss_g.backward()
+                        optimizer.step()
 
-    def train(
-        self,
-        train_loader,
-        epoch,
-        best_epoch,
-        best_mse_loss,
-        best_mse_data,
-        best_shd,
-        best_shd_graph,
-        ground_truth_G,
-        lambda_A,
-        c_A,
-        optimizerMLP,
-        optimizerG,
-        optimizerG1,
-        optimizerD,
-        optimizerD1
-    ):
-        """training algorithm for a single epoch"""
-        t = time.time()
-        D_loss = []
-        G_loss = []
-        Pen_loss = []
-        MMD_loss = []
-        mse_train = []
-        shd_trian = []
+                    ###################################################################
+                    # (2) Produce diverse samples using the WGAN architecture
+                    ###################################################################
+                    with torch.no_grad():
+                        generator.fc1_pos.weight.copy_(model.fc1_pos.weight)
+                        generator.fc1_neg.weight.copy_(model.fc1_neg.weight)
+                        self.step = 2
 
-        # update optimizers
-        optimizerMLP, lr = self.update_optimizer(optimizerMLP, self.lr, c_A)
-        optimizerG, lr = self.update_optimizer(optimizerG, self.lr, c_A)
-        optimizerG1, lr = self.update_optimizer(optimizerG1, self.lr, c_A)
-        optimizerD, lr = self.update_optimizer(optimizerD, self.lr, c_A)
-        optimizerD1, lr = self.update_optimizer(optimizerD1, self.lr, c_A)
-
-        for batch_idx, (data, relations) in enumerate(train_loader):
-            ###################################################################
-            # (1) Learn causal structure with original Notears-MLP model
-            ###################################################################
-
-            for i in range(self.csl_steps):
-                for n in range(self.discriminator_steps):
-
-                    data, relations = (
-                        Variable(data.to(self.device)).double(),
-                        Variable(relations.to(self.device)).double(),
-                    )
-
-                    if self.data_type != "synthetic":
-                        data = data.unsqueeze(2)
-
-                    optimizerD1.zero_grad()
-
-                    fake_data = self(data)
-
-                    y_fake = self.discriminator1(fake_data)
-
-                    y_real = self.discriminator1(data)
-
-                    if self.x_dims > 1:
-                        # vector case
-                        pen = self.discriminator1.calc_gradient_penalty(
-                            data.view(-1, data.size(1) * data.size(2)),
-                            fake_data.view(-1, fake_data.size(1) * fake_data.size(2)),
-                            self.device,
-                        )
-                        loss_d = -(
-                            torch.mean(F.softplus(y_real))
-                            - torch.mean(F.softplus(y_fake))
-                        )
-                    else:
-                        # normal continious and discrete data case
-                        pen = self.discriminator1.calc_gradient_penalty(
-                            data, fake_data, self.device
-                        )
-                        loss_d = -(
-                            torch.mean(F.softplus(y_real))
-                            - torch.mean(F.softplus(y_fake))
-                        )
-
-                    Pen_loss.append(pen.item())
-                    pen.backward(retain_graph=True)
-
-                    D_loss.append(loss_d.item())
-                    loss_d.backward()
-                    loss_d = optimizerD1.step()
-
-                data, relations = (
-                    Variable(data.to(self.device)).double(),
-                    Variable(relations.to(self.device)).double(),
-                )
-
-                optimizerMLP.zero_grad()
-
-                fake_data = self(data)
-
-                loss_mmd = self.compute_mmd(fake_data, data.squeeze())
-
-                MMD_loss.append(loss_mmd.item())
-
-                loss = self.squared_loss(fake_data, data.squeeze()) + loss_mmd
-
-                h_A = self.mlp.h_func()
-
-                penalty = lambda_A * h_A + 0.5 * c_A * h_A * h_A
-
-                l2_reg = 0.5 * self.mul2 * self.mlp.l2_reg()
-                l1_reg = self.mul1 * self.mlp.fc1_l1_reg()
-
-                loss_mlp = loss + penalty + l2_reg + l1_reg
-
-                loss_mlp.backward(retain_graph=True)
-                loss_mlp = optimizerMLP.step()
-
-                optimizerMLP.zero_grad()
-
-                y_fake = self.discriminator1(fake_data.data.clone())
-
-                loss_g = -torch.mean(y_fake)
-                loss_g.backward()
-                loss_g = optimizerMLP.step()
-
-            ###################################################################
-            # (2) Produce diverse samples using the WGAN architecture
-            ###################################################################
-
-            with torch.no_grad():
-                self.generator.fc1_pos.weight.copy_(self.mlp.fc1_pos.weight)
-                self.generator.fc1_neg.weight.copy_(self.mlp.fc1_neg.weight)
-                self.step = 2
-
-            for n in range(self.discriminator_steps):
-
-                data, relations = (
-                    Variable(data.to(self.device)).double(),
-                    Variable(relations.to(self.device)).double(),
-                )
-
-                optimizerD.zero_grad()
-
-                fake_data_gen = self(data)
-
-                y_fake = self.discriminator(fake_data_gen)
-
-                y_real = self.discriminator(data)
-
-                if self.x_dims > 1:
-                    # vector case
-                    pen = self.discriminator.calc_gradient_penalty(
-                        data.view(-1, data.size(1) * data.size(2)),
-                        fake_data_gen.view(
-                            -1, fake_data_gen.size(1) * fake_data_gen.size(2)
-                        ),
-                        self.device,
-                    )
-                    loss_d = -(
-                        torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake))
-                    )
-                else:
-                    # normal continious and discrete data case
-                    pen = self.discriminator.calc_gradient_penalty(
-                        data, fake_data_gen, self.device
-                    )
-                    loss_d = -(
-                        torch.mean(F.softplus(y_real)) - torch.mean(F.softplus(y_fake))
-                    )
-
-                Pen_loss.append(pen.item())
-                pen.backward(retain_graph=True)
-
-                D_loss.append(loss_d.item())
-                loss_d.backward()
-                loss_d = optimizerD.step()
-
-            optimizerG.zero_grad()
-
-            data, relations = (
-                Variable(data.to(self.device)).double(),
-                Variable(relations.to(self.device)).double(),
-            )
-
-            fake_data_gen = self(data)
-
-            y_fake = self.discriminator(fake_data_gen)
-
-            loss_g = -torch.mean(F.softplus(y_fake))
-
-            G_loss.append(loss_g.item())
-            loss_g.backward()
-
-            loss_g = optimizerG.step()
-
-            with torch.no_grad():
-                # self.mlp.fc2.load_state_dict(self.generator.fc2.state_dict())
-                self.step = 1
-
-            self.schedulerMLP.step()
-            self.schedulerG.step()
-            self.schedulerG1.step()
-            self.schedulerD.step()
-            self.schedulerD1.step()
-
-            # compute metrics
-            graph = self.mlp.fc1_to_adj()
-            graph[np.abs(graph) < self.graph_threshold] = 0
-
-            mse = F.mse_loss(fake_data, data.squeeze()).item()
-
-            if ground_truth_G != None:
-                fdr, tpr, fpr, shd, nnz = count_accuracy(
-                    ground_truth_G, nx.DiGraph(graph)
-                )
-                shd_trian.append(shd)
+                    for n in range(self.discriminator_steps):
+                        ###################################################################
+                        # (2.1) Update D network: minimize ||D(x) - D(G(z))|| + GP
+                        ###################################################################
+                        data, relations = (Variable(data.squeeze()), Variable(relations))
+                        optimizerD1.zero_grad()
+                        X_hat = generator(data)
+                        y_fake = discriminator1(X_hat)
+                        y_real = discriminator1(data)
+                        pen = discriminator1.calc_gradient_penalty(data, X_hat)
+                        loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
+                        pen.backward(retain_graph=True)
+                        loss_d.backward()
+                        optimizerD1.step()
+                    ###############################################
+                    # (2.2) Update G network: maximize -D(G(z))
+                    ###############################################
+                    data, relations = (Variable(data.squeeze()), Variable(relations))
+                    optimizerG.zero_grad()
+                    X_hat = generator(data)
+                    y_fake = discriminator1(X_hat)
+                    loss_g = -torch.mean(y_fake)
+                    loss_g.backward()
+                    optimizerG.step()
+                    self.step = 1
+                
+                W_est = model.fc1_to_adj()
+                W_est[np.abs(W_est) < 0.3] = 0
+                acc = self.count_accuracy(ground_truth, W_est != 0)
 
                 if best_shd == np.inf and best_mse_loss == np.inf:
-                    best_shd = shd
-                    best_mse_loss = mse
-                elif shd < best_shd:
-                    best_shd = shd
-                    best_shd_graph = graph
-                    best_mse_loss = np.inf
-                elif shd == best_shd and mse < best_mse_loss:
-                    best_mse_loss = mse
-                    best_mse_data = fake_data
+                    best_shd = acc['shd']
+                    best_mse_loss = self.squared_loss(X_hat, data).item()
+                elif acc['shd'] < best_shd:
+                    best_shd = acc['shd']
+                    best_epoch = epoch
+                    best_shd_graph = W_est 
+                    best_mse_loss = self.squared_loss(X_hat, data).item()
+                elif acc['shd'] == best_shd and self.squared_loss(X_hat, data).item() < best_mse_loss:
+                    best_mse_loss = self.squared_loss(X_hat, data).item()
                     best_epoch = epoch
                     self.save_model()
-            else:
-                if best_mse_loss == np.inf:
-                    best_mse_loss = mse
-                elif mse < best_mse_loss:
-                    best_mse_loss = mse
-                    best_mse_data = fake_data
 
-            mse_train.append(mse)
-
-        if ground_truth_G != None:
-            if self.verbose:
-                print(
-                    "Epoch: {:04d}".format(epoch),
-                    "D_loss: {:.10f}".format(np.mean(D_loss)),
-                    "G_loss: {:.10f}".format(np.mean(G_loss)),
-                    "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
-                    "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
-                    "mse_train: {:.10f}".format(np.mean(mse_train)),
-                    "shd_trian: {:.10f}".format(np.mean(shd_trian)),
-                    "time: {:.4f}s".format(time.time() - t),
-                )
-
-            return (
-                np.mean(D_loss),
-                np.mean(G_loss),
-                np.mean(Pen_loss),
-                np.mean(MMD_loss),
-                np.mean(mse_train),
-                graph,
-                best_shd,
-                best_shd_graph,
-                best_mse_loss,
-                best_mse_data,
-                best_epoch,
-            )  # , origin_A
-        else:
-            if self.verbose:
-                print(
-                    "Epoch: {:04d}".format(epoch),
-                    "D_loss: {:.10f}".format(np.mean(D_loss)),
-                    "G_loss: {:.10f}".format(np.mean(G_loss)),
-                    "Pen_loss: {:.10f}".format(np.mean(Pen_loss)),
-                    "MMD_loss: {:.10f}".format(np.mean(MMD_loss)),
-                    "mse_train: {:.10f}".format(np.mean(mse_train)),
-                    "time: {:.4f}s".format(time.time() - t),
-                )
-
-            return (
-                np.mean(D_loss),
-                np.mean(G_loss),
-                np.mean(Pen_loss),
-                np.mean(MMD_loss),
-                np.mean(mse_train),
-                graph,
-                best_shd,
-                best_shd_graph,
-                best_mse_loss,
-                best_mse_data,
-                best_epoch,
-            )  # , origin_A
-
-    def fit(self, train_loader, ground_truth_G=None):
-
-        if not hasattr(self, "mlp"):
-            self.mlp = (
-                Generator(
-                    self.batch_size,
-                    self.z_dims,
-                    dims=[self.data_variable_size, 10, 1],
-                    device=self.device,
-                    graph_linear_type=self.graph_linear_type,
-                    bias=True,
-                )
-                .double()
-                .to(self.device)
-            )
-
-        if not hasattr(self, "discriminator"):
-            self.discriminator = (
-                Discriminator(
-                    self.data_variable_size,
-                    (256, 256),
-                    self.negative_slope,
-                    self.dropout_rate,
-                )
-                .double()
-                .to(self.device)
-            )
-
-        if not hasattr(self, "discriminator1"):
-            self.discriminator1 = (
-                Discriminator(
-                    self.data_variable_size,
-                    (256, 256),
-                    self.negative_slope,
-                    self.dropout_rate,
-                )
-                .double()
-                .to(self.device)
-            )
-
-        if not hasattr(self, "generator"):
-            self.generator = (
-                Generator(
-                    self.batch_size,
-                    self.z_dims,
-                    dims=[self.data_variable_size, 10, 1],
-                    device=self.device,
-                    graph_linear_type=self.graph_linear_type,
-                    step=2,
-                    bias=True,
-                )
-                .double()
-                .to(self.device)
-            )
-
-        if not hasattr(self, "optimizerMLP"):
-            self.optimizerMLP = optim.Adam(self.mlp.parameters(), lr=self.lr)
-
-        if not hasattr(self, "optimizerD"):
-            self.optimizerD = optim.Adam(
-                self.discriminator.parameters(),
-                lr=self.lr,
-                betas=(0.5, 0.9),
-                weight_decay=1e-6,
-            )
-
-        if not hasattr(self, "optimizerD1"):
-            self.optimizerD1 = optim.Adam(
-                self.discriminator.parameters(),
-                lr=self.lr,
-                betas=(0.5, 0.9),
-                weight_decay=1e-6,
-            )
-
-        if not hasattr(self, "optimizerG1"):
-            self.optimizerG1 = optim.Adam(self.mlp.parameters(), lr=self.lr)
-
-        if not hasattr(self, "optimizerG"):
-            self.optimizerG = optim.Adam(self.generator.fc2.parameters(), lr=self.lr)
-
-        if not hasattr(self, "schedulerMLP"):
-            self.schedulerMLP = lr_scheduler.StepLR(
-                self.optimizerMLP, step_size=self.lr_decay, gamma=self.gamma
-            )
-
-        if not hasattr(self, "schedulerD"):
-            self.schedulerD = lr_scheduler.StepLR(
-                self.optimizerD, step_size=self.lr_decay, gamma=self.gamma
-            )
-
-        if not hasattr(self, "schedulerD1"):
-            self.schedulerD1 = lr_scheduler.StepLR(
-                self.optimizerD1, step_size=self.lr_decay, gamma=self.gamma
-            )
-
-        if not hasattr(self, "schedulerG"):
-            self.schedulerG = lr_scheduler.StepLR(
-                self.optimizerG, step_size=self.lr_decay, gamma=self.gamma
-            )
-
-        if not hasattr(self, "schedulerG1"):
-            self.schedulerG1 = lr_scheduler.StepLR(
-                self.optimizerG1, step_size=self.lr_decay, gamma=self.gamma
-            )
-
-        best_ELBO_loss = np.inf
-        best_NLL_loss = np.inf
-        best_MSE_loss = np.inf
-        best_shd = np.inf
-        best_epoch = 0
-        best_ELBO_graph = []
-        best_NLL_graph = []
-        best_MSE_graph = []
-        best_shd_graph = []
-        best_MSE_data = []
-
-        try:
-            for step_k in range(self.k_max_iter):
-                while self.c_A < 1e20:
-                    for epoch in range(self.epochs):
-                        (
-                            D_loss,
-                            G_loss,
-                            Pen_loss,
-                            Info_loss,
-                            MSE_loss,
-                            graph,
-                            best_shd,
-                            best_shd_graph,
-                            best_MSE_loss,
-                            best_MSE_data,
-                            best_epoch,
-                        ) = self.train(
-                            train_loader,
-                            epoch,
-                            best_epoch,
-                            best_MSE_loss,
-                            best_MSE_data,
-                            best_shd,
-                            best_shd_graph,
-                            ground_truth_G,
-                            self.lambda_A,
-                            self.c_A,
-                            self.optimizerMLP,
-                            self.optimizerG,
-                            self.optimizerG1,
-                            self.optimizerD,
-                            self.optimizerD1
+                if self.verbose:
+                    if ground_truth is not None:
+                        print(
+                            "Step: {:01d}".format(self.step), 
+                            "Epoch: {:04d}".format(epoch),
+                            "D_loss: {:.10f}".format(-np.mean(loss_d.item())),
+                            "G_loss: {:.10f}".format(-np.mean(loss_g.item())),
+                            "Pen_loss: {:.10f}".format(np.mean(pen.item())),
+                            "Kld_loss: {:.10f}".format(np.mean(kld_loss.item())),
+                            "Mmd_loss: {:.10f}".format(np.mean(mmd_loss.item())),
+                            "mse_train: {:.10f}".format(np.mean(self.squared_loss(X_hat, data).item())),
+                            "shd_trian: {:.10f}".format(np.mean(acc['shd'])),
+                            "time: {:.4f}s".format(time.time() - t),
+                        )
+                    else:
+                        print(
+                            "Step: {:01d}".format(self.step), 
+                            "Epoch: {:04d}".format(epoch),
+                            "D_loss: {:.10f}".format(-np.mean(loss_d.item())),
+                            "G_loss: {:.10f}".format(-np.mean(loss_g.item())),
+                            "Pen_loss: {:.10f}".format(np.mean(pen.item())),
+                            "Kld_loss: {:.10f}".format(np.mean(kld_loss.item())),
+                            "Mmd_loss: {:.10f}".format(np.mean(mmd_loss.item())),
+                            "mse_train: {:.10f}".format(np.mean(self.squared_loss(X_hat, data).item())),
+                            "time: {:.4f}s".format(time.time() - t),
                         )
 
-                    if self.verbose:
-                        if ground_truth_G != None:
-                            print("Optimization Finished!")
-                            print("Best Epoch: {:04d}".format(best_epoch))
-                            print("Best SHD: {:04d}".format(best_shd))
-                            print("Best MSE Loss: {:.10f}".format(best_MSE_loss))
-                        else:
-                            print("Optimization Finished!")
-                            print("Best Epoch: {:04d}".format(best_epoch))
-                            print("Best MSE Loss: {:.10f}".format(best_MSE_loss))
-                    # print("Best SHD Graph:")
-                    # print(best_shd_graph)
-                    # print("Best MSE Data:")
-                    # print(best_MSE_data)
+            if self.verbose:
+                if ground_truth is not None:
+                    print("Optimization Finished!")
+                    print("Best Epoch: {:04d}".format(best_epoch))
+                    print("Best SHD: {:04d}".format(best_shd))
+                    print("Best MSE Loss: {:.10f}".format(best_mse_loss))
+                else:
+                    print("Optimization Finished!")
+                    print("Best Epoch: {:04d}".format(best_epoch))
+                    print("Best MSE Loss: {:.10f}".format(best_mse_loss))
 
-                    # update parameters
-                    with torch.no_grad():
-                        self.h_A_new = self.generator.h_func().item()
-                    if self.h_A_new > 0.25 * self.h_A_old:
-                        self.c_A *= 10
-                    else:
-                        break
-
-                # update parameters
-                # h_A, adj_A are computed in loss anyway, so no need to store
-                self.h_A_old = self.h_A_new
-                self.lambda_A += self.c_A * self.h_A_new
-
-                if self.h_A_new <= self.h_tol:
-                    break
-
-            if ground_truth_G != None:
-
-                best_shd_graph[np.abs(best_shd_graph) < 0.3] = 0
-                # print(graph)
-                fdr, tpr, fpr, shd, nnz = count_accuracy(
-                    ground_truth_G, nx.DiGraph(best_shd_graph)
-                )
-                print(
-                    "threshold 0.3, Accuracy: fdr",
-                    fdr,
-                    " tpr ",
-                    tpr,
-                    " fpr ",
-                    fpr,
-                    "shd",
-                    shd,
-                    "nnz",
-                    nnz,
-                )
-
-                return best_shd_graph, best_MSE_data
+            with torch.no_grad():
+                h_new = model.h_func().item()
+            if h_new > 0.25 * h:
+                rho *= 10
             else:
-                # graph = self.generator.fc1_to_adj()
-                graph[np.abs(graph) < self.graph_threshold] = 0
-                return graph, best_MSE_data
+                break
+        alpha += rho * h_new
+        return rho, alpha, h_new, best_shd, best_epoch, best_shd_graph, best_mse_loss
 
-        except KeyboardInterrupt:
-            # print the best anway
-            # print(best_ELBO_graph)
-            # print(nx.to_numpy_array(ground_truth_G))
-            fdr, tpr, fpr, shd, nnz = count_accuracy(
-                ground_truth_G, nx.DiGraph(best_ELBO_graph)
-            )
-            print(
-                "Best ELBO Graph Accuracy: fdr",
-                fdr,
-                " tpr ",
-                tpr,
-                " fpr ",
-                fpr,
-                "shd",
-                shd,
-                "nnz",
-                nnz,
-            )
+    def notears_nonlinear(self, model: nn.Module,
+                        discriminator: nn.Module,
+                        generator: nn.Module,
+                        discriminator1: nn.Module,
+                        X: np.ndarray,
+                        ground_truth: np.ndarray = None,
+                        lambda1: float = 0.,
+                        lambda2: float = 0.,
+                        max_iter: int = 100,
+                        h_tol: float = 1e-8,
+                        rho_max: float = 1e+16,
+                        w_threshold: float = 0.3):
+        rho, alpha, h = 1.0, 0.0, np.inf
+        best_mse_loss, best_shd, best_epoch, best_shd_graph  = np.inf, np.inf, 0, []
+        for _ in range(max_iter):
+            rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, X, lambda1, lambda2,
+                                            rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth)
+            if h <= h_tol or rho >= rho_max:
+                break
+        best_shd_graph[np.abs(best_shd_graph) < w_threshold] = 0
+        return best_shd_graph
 
-            # print(best_NLL_graph)
-            # print(nx.to_numpy_array(ground_truth_G))
-            fdr, tpr, fpr, shd, nnz = count_accuracy(
-                ground_truth_G, nx.DiGraph(best_NLL_graph)
-            )
-            print(
-                "Best NLL Graph Accuracy: fdr",
-                fdr,
-                " tpr ",
-                tpr,
-                " fpr ",
-                fpr,
-                "shd",
-                shd,
-                "nnz",
-                nnz,
-            )
+    def fit(self, model, discriminator, generator, discriminator1, train_data, ground_truth):
 
-            # print(best_MSE_graph)
-            # print(nx.to_numpy_array(ground_truth_G))
-            fdr, tpr, fpr, shd, nnz = count_accuracy(
-                ground_truth_G, nx.DiGraph(best_MSE_graph)
-            )
-            print(
-                "Best MSE Graph Accuracy: fdr",
-                fdr,
-                " tpr ",
-                tpr,
-                " fpr ",
-                fpr,
-                "shd",
-                shd,
-                "nnz",
-                nnz,
-            )
+        causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
 
-            # best_shd_graph = self.generator.fc1_to_adj()
-            best_shd_graph[np.abs(best_shd_graph) < 0.1] = 0
-            # print(graph)
-            fdr, tpr, fpr, shd, nnz = count_accuracy(
-                ground_truth_G, nx.DiGraph(best_shd_graph)
-            )
-            print(
-                "threshold 0.1, Accuracy: fdr",
-                fdr,
-                " tpr ",
-                tpr,
-                " fpr ",
-                fpr,
-                "shd",
-                shd,
-                "nnz",
-                nnz,
-            )
+        real_df, fake_df = self.sample(train_data)
 
-            best_shd_graph[np.abs(best_shd_graph) < 0.2] = 0
-            # print(graph)
-            fdr, tpr, fpr, shd, nnz = count_accuracy(
-                ground_truth_G, nx.DiGraph(best_shd_graph)
-            )
-            print(
-                "threshold 0.2, Accuracy: fdr",
-                fdr,
-                " tpr ",
-                tpr,
-                " fpr ",
-                fpr,
-                "shd",
-                shd,
-                "nnz",
-                nnz,
-            )
-
-            best_shd_graph[np.abs(best_shd_graph) < 0.3] = 0
-            # print(graph)
-            fdr, tpr, fpr, shd, nnz = count_accuracy(
-                ground_truth_G, nx.DiGraph(best_shd_graph)
-            )
-            print(
-                "threshold 0.3, Accuracy: fdr",
-                fdr,
-                " tpr ",
-                tpr,
-                " fpr ",
-                fpr,
-                "shd",
-                shd,
-                "nnz",
-                nnz,
-            )
-
-    def generateSyntheticData(
-        self, dims, generator, var_names, graph_threshold=0.05, device="cuda"
-    ):
+        return causal_graph, real_df, fake_df
+    
+    def generateSyntheticData(self, dims, generator, graph_threshold=0.05, device="cpu"):
 
         batch_size, n_nodes, z_dim = dims[0], dims[1], dims[2]
 
@@ -1043,20 +581,14 @@ class AAE_WGAN_GP(nn.Module):
         assert len(ordered_vertices) == n_nodes
         print("Ordered nodes: {}".format(ordered_vertices))
 
-        pred_X = torch.zeros((batch_size, n_nodes)).double().to(device)
-        z = Variable(
-            torch.DoubleTensor(np.random.normal(0, 1, (batch_size, n_nodes, z_dim)))
-        ).to(device)
-
-        weights_dict, biases_dict = {}, {}
+        pred_X = torch.zeros((batch_size, n_nodes)).to(device)
+        z = Variable(torch.FloatTensor(np.random.normal(0, 1, (batch_size, n_nodes, z_dim)))).to(device)
 
         with torch.no_grad():
             for i in range(n_nodes):
                 current_node = int(ordered_vertices[i])
                 weight = weights[current_node]
                 bias = biases[current_node]
-                # weights_dict[var_names[current_node]] = [w.detach().cpu().numpy() for w in weight]
-                # biases_dict[var_names[current_node]] = [b.detach().cpu().numpy() for b in biases]
 
                 h = generator.fc1_pos(pred_X) - generator.fc1_neg(pred_X)
                 h = h.view(-1, n_nodes, n_nodes)
@@ -1084,93 +616,94 @@ class AAE_WGAN_GP(nn.Module):
         n_synth = real_df.shape[0]
         num_nodes = real_df.shape[1] - 1
 
-        generator = (
-            Generator(
-                n_synth,
-                1,
-                dims=[num_nodes, num_nodes, 1],
-                device=self.device,
-                bias=True,
-            )
-            .double()
-            .to(self.device)
-        )
+        generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
         generator.load_state_dict(torch.load(weights))
         generator.eval()
 
-        synthetic_data = self.generateSyntheticData(
-            dims=[n_synth, num_nodes, 1], generator=generator
-        )
+        synthetic_data = self.generateSyntheticData(dims=[n_synth, num_nodes, 1], generator=generator)
 
         fake_df = pd.DataFrame(synthetic_data.cpu().numpy(), columns=columns)
         fake_df["data"] = "fake"
 
-        return fake_df
+        return real_df, fake_df
+    
+    def count_accuracy(self, B_true, B_est):
+        """Compute various accuracy metrics for B_est.
 
+        true positive = predicted association exists in condition in correct direction
+        reverse = predicted association exists in condition in opposite direction
+        false positive = predicted association does not exist in condition
+
+        Args:
+            B_true (np.ndarray): [d, d] ground truth graph, {0, 1}
+            B_est (np.ndarray): [d, d] estimate, {0, 1, -1}, -1 is undirected edge in CPDAG
+
+        Returns:
+            fdr: (reverse + false positive) / prediction positive
+            tpr: (true positive) / condition positive
+            fpr: (reverse + false positive) / condition negative
+            shd: undirected extra + undirected missing + reverse
+            nnz: prediction positive
+        """
+        if (B_est == -1).any():  # cpdag
+            if not ((B_est == 0) | (B_est == 1) | (B_est == -1)).all():
+                raise ValueError('B_est should take value in {0,1,-1}')
+            if ((B_est == -1) & (B_est.T == -1)).any():
+                raise ValueError('undirected edge should only appear once')
+        else:  # dag
+            if not ((B_est == 0) | (B_est == 1)).all():
+                raise ValueError('B_est should take value in {0,1}')
+        d = B_true.shape[0]
+        # linear index of nonzeros
+        pred_und = np.flatnonzero(B_est == -1)
+        pred = np.flatnonzero(B_est == 1)
+        cond = np.flatnonzero(B_true)
+        cond_reversed = np.flatnonzero(B_true.T)
+        cond_skeleton = np.concatenate([cond, cond_reversed])
+        # true pos
+        true_pos = np.intersect1d(pred, cond, assume_unique=True)
+        # treat undirected edge favorably
+        true_pos_und = np.intersect1d(pred_und, cond_skeleton, assume_unique=True)
+        true_pos = np.concatenate([true_pos, true_pos_und])
+        # false pos
+        false_pos = np.setdiff1d(pred, cond_skeleton, assume_unique=True)
+        false_pos_und = np.setdiff1d(pred_und, cond_skeleton, assume_unique=True)
+        false_pos = np.concatenate([false_pos, false_pos_und])
+        # reverse
+        extra = np.setdiff1d(pred, cond, assume_unique=True)
+        reverse = np.intersect1d(extra, cond_reversed, assume_unique=True)
+        # compute ratio
+        pred_size = len(pred) + len(pred_und)
+        cond_neg_size = 0.5 * d * (d - 1) - len(cond)
+        fdr = float(len(reverse) + len(false_pos)) / max(pred_size, 1)
+        tpr = float(len(true_pos)) / max(len(cond), 1)
+        fpr = float(len(reverse) + len(false_pos)) / max(cond_neg_size, 1)
+        # structural hamming distance
+        pred_lower = np.flatnonzero(np.tril(B_est + B_est.T))
+        cond_lower = np.flatnonzero(np.tril(B_true + B_true.T))
+        extra_lower = np.setdiff1d(pred_lower, cond_lower, assume_unique=True)
+        missing_lower = np.setdiff1d(cond_lower, pred_lower, assume_unique=True)
+        shd = len(extra_lower) + len(missing_lower) + len(reverse)
+        return {'fdr': fdr, 'tpr': tpr, 'fpr': fpr, 'shd': shd, 'nnz': pred_size}
+    
     def save_model(self):
-        assert (
-            self.save_directory != ""
-        ), "Saving directory not specified! Please specify a saving directory!"
-        torch.save(
-            self.mlp.state_dict(), os.path.join(self.save_directory, "MLP.pth"),
-        )
-        torch.save(
-            self.generator.state_dict(),
-            os.path.join(self.save_directory, "generator.pth"),
-        )
-        torch.save(
-            self.discriminator.state_dict(),
-            os.path.join(self.save_directory, "discriminator.pth"),
-        )
+        assert (self.save_directory != ""), "Saving directory not specified! Please specify a saving directory!"
+        torch.save(self.model.state_dict(), os.path.join(self.save_directory, "MLP.pth"))
+        torch.save(self.generator.state_dict(), os.path.join(self.save_directory, "generator.pth"))
+        torch.save(self.discriminator.state_dict(), os.path.join(self.save_directory, "discriminator.pth"))
 
     def load_model(self):
-        assert (
-            self.load_directory != ""
-        ), "Loading directory not specified! Please specify a loading directory!"
+        assert (self.load_directory != ""), "Loading directory not specified! Please specify a loading directory!"
 
-        mlp = (
-            Generator(
-                self.batch_size,
-                self.z_dims,
-                self.x_dims,
-                dims=[self.data_variable_size, 10, 1],
-                device=self.device,
-                bias=True,
-            )
-            .double()
-            .to(self.device)
-        )
+        model = Generator(dims=[self.data_variable_size,10,1], bias=True)
+        discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
+        generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
 
-        generator = (
-            Generator(
-                self.batch_size,
-                self.z_dims,
-                self.x_dims,
-                dims=[self.data_variable_size, 10, 1],
-                device=self.device,
-                step=2,
-                bias=True,
-            )
-            .double()
-            .to(self.device)
-        )
-        discriminator = (
-            Discriminator(
-                self.data_variable_size,
-                (256, 256),
-                self.negative_slope,
-                self.dropout_rate,
-            )
-            .double()
-            .to(self.device)
-        )
+        model.load_state_dict(torch.load(os.path.join(self.load_directory, "MLP.pth")))
+        generator.load_state_dict(torch.load(os.path.join(self.load_directory, "generator.pth")))
+        discriminator.load_state_dict(torch.load(os.path.join(self.load_directory, "discriminator.pth")))
 
-        mlp.load_state_dict(torch.load(os.path.join(self.load_directory, "MLP.pth")))
-        generator.load_state_dict(
-            torch.load(os.path.join(self.load_directory, "generator.pth"))
-        )
-        discriminator.load_state_dict(
-            torch.load(os.path.join(self.load_directory, "discriminator.pth"))
-        )
+        return model, generator, discriminator
 
-        return mlp, generator, discriminator
+
+    

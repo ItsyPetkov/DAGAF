@@ -36,237 +36,64 @@ from argparse import ArgumentParser
 
 # Adding a lot of args here
 parser = ArgumentParser()
-parser.add_argument(
-    "--path", type=str, default="", help="choosing a path for the input."
-)
-parser.add_argument(
-    "--column_names_list",
-    type=str,
-    nargs="+",
-    default=[],
-    help="choosing the column names for samping of original dataframe",
-)
-parser.add_argument(
-    "--discrete_column_names_list",
-    type=str,
-    nargs="+",
-    default=[],
-    help="choosing the discrete column names in the dataframe",
-)
-parser.add_argument(
-    "--discriminator_steps",
-    type=int,
-    default=1,
-    help="Number of steps for the discriminator",
-)
-parser.add_argument(
-    "--csl_steps",
-    type=int,
-    default=1,
-    help="Number of steps for the causal structure learning",
-)
-parser.add_argument(
-    "--initial_identifier",
-    type=str,
-    default="",
-    help="Initial Identifier for the sample dataframe",
-)
-parser.add_argument(
-    "--num_of_rows",
-    type=int,
-    default=-1,
-    help="Number of rows in the sampled dataframe",
-)
-parser.add_argument(
-    "--save_directory",
-    default="",
-    type=str,
-    help="A directory to save a trained model to.",
-)
-parser.add_argument(
-    "--load_directory",
-    default="",
-    type=str,
-    help="A directory to load a trained model from.",
-)
-parser.add_argument(
-    "--export_directory",
-    type=str,
-    default="",
-    help="choosing a directory for the output.",
-)
-parser.add_argument(
-    "--verbose",
-    type=int,
-    default=1,
-    help="used to control the print statements per epoch.",
-)
+parser.add_argument("--path", type=str, default="", help="choosing a path for the input.")
+parser.add_argument("--column_names_list", type=str, nargs="+", default=[], help="choosing the column names for samping of original dataframe")
+parser.add_argument("--discrete_column_names_list", type=str, nargs="+", default=[], help="choosing the discrete column names in the dataframe")
+parser.add_argument("--discriminator_steps", type=int, default=1, help="Number of steps for the discriminator")
+parser.add_argument("--csl_steps", type=int, default=1, help="Number of steps for the causal structure learning")
+parser.add_argument("--initial_identifier", type=str, default="", help="Initial Identifier for the sample dataframe")
+parser.add_argument("--num_of_rows", type=int, default=-1, help="Number of rows in the sampled dataframe")
+parser.add_argument("--save_directory", default="", type=str, help="A directory to save a trained model to.")
+parser.add_argument("--load_directory", default="", type=str, help="A directory to load a trained model from.")
+parser.add_argument("--export_directory", type=str, default="", help="choosing a directory for the output.")
+parser.add_argument("--verbose", type=int, default=1, help="used to control the print statements per epoch.")
 
 # -----------data parameters ------
 # configurations
-parser.add_argument(
-    "--synthesize", type=int, default=0, help="Flag for synthesing synthetic data"
-)
-parser.add_argument(
-    "--pns", type=int, default=1, help="Flag for primary neighbour selection"
-)
-parser.add_argument(
-    "--data_type",
-    type=str,
-    default="synthetic",
-    choices=["synthetic", "benchmark", "real"],
-    help="choosing which experiment to do.",
-)
-parser.add_argument(
-    "--data_sample_size", type=int, default=5000, help="the number of samples of data"
-)
-parser.add_argument(
-    "--data_variable_size",
-    type=int,
-    default=10,
-    help="the number of variables in synthetic generated data",
-)
-parser.add_argument(
-    "--graph_type",
-    type=str,
-    default="erdos-renyi",
-    help="the type of DAG graph by generation method",
-)
-parser.add_argument(
-    "--graph_degree",
-    type=int,
-    default=3,
-    help="the number of degree in generated DAG graph",
-)
-parser.add_argument(
-    "--graph_sem_type",
-    type=str,
-    default="linear-gauss",
-    help="the structure equation model (SEM) parameter type",
-)
-parser.add_argument(
-    "--graph_linear_type",
-    type=str,
-    default="post_nonlinear_2",
-    help="the synthetic data type: linear -> linear SEM, nonlinear_1 -> x=Acos(x+1)+z, nonlinear_2 -> x=2sin(A(x+0.5))+A(x+0.5)+z"
-    + 'post_nonlinear_1 -> x=tanh(Acos(x+1)+z), post_nonlinear_2 -> x=tanh(2sin(A(x+0.5))+A(x+0.5)+z)',
-)
-parser.add_argument(
-    "--edge-types", type=int, default=2, help="The number of edge types to infer."
-)
-parser.add_argument(
-    "--x_dims",
-    type=int,
-    default=1,  # vector case: need to be equal to the last dimension of vector data to work
-    help="The number of input dimensions: default 1.",
-)
-parser.add_argument(
-    "--z_dims",
-    type=int,
-    default=1,
-    help="The number of latent variable dimensions: default the same as variable size.",
-)
-parser.add_argument(
-    "--steps",
-    type=int,
-    default=1,
-    help="Number of steps for time-series data generation",
-)
-parser.add_argument("--export", type=int, default=0, help="Flag for exporting data")
+parser.add_argument("--synthesize", type=int, default=0, help="Flag for synthesing synthetic data")
+parser.add_argument("--pns", type=int, default=1, help="Flag for primary neighbour selection")
+parser.add_argument("--data_type", type=str, default="synthetic", choices=["synthetic", "benchmark", "real"], help="choosing which experiment to do.")
+parser.add_argument("--data_sample_size", type=int, default=5000, help="the number of samples of data")
+parser.add_argument("--data_variable_size", type=int, default=10, help="the number of variables in synthetic generated data")
+parser.add_argument("--graph_type", type=str, default="erdos-renyi", help="the type of DAG graph by generation method")
+parser.add_argument("--graph_degree", type=int, default=3, help="the number of degree in generated DAG graph")
+parser.add_argument("--graph_sem_type", type=str, default="linear-gauss", help="the structure equation model (SEM) parameter type")
+parser.add_argument("--graph_linear_type", type=str, default="nonlinear_2", help="the synthetic data type: linear -> linear SEM, nonlinear_1 -> x=Acos(x+1)+z," 
+                    + "nonlinear_2 -> x=2sin(A(x+0.5))+A(x+0.5)+z" + 'post_nonlinear_1 -> x=tanh(Acos(x+1)+z), post_nonlinear_2 -> x=tanh(2sin(A(x+0.5))+A(x+0.5)+z)')
+parser.add_argument("--edge-types", type=int, default=2, help="The number of edge types to infer.")
+parser.add_argument("--x_dims", type=int, default=1, help="The number of input dimensions: default 1.") # vector case: need to be equal to the last dimension of vector data to work
+parser.add_argument("--z_dims", type=int, default=1, help="The number of latent variable dimensions: default the same as variable size.")
+parser.add_argument("--steps", type=int, default=1, help="Number of steps for time-series data generation")
+parser.add_argument("--export", type=int, default=1, help="Flag for exporting data")
 
 # -----------training hyperparameters
-parser.add_argument(
-    "--graph_threshold",
-    type=float,
-    default=0.3,  # 0.3 is good, 0.2 is error prune
-    help="threshold for learned adjacency matrix binarization",
-)
-parser.add_argument(
-    "--tau_A", type=float, default=0.0, help="coefficient for L-1 norm of A."
-)
-parser.add_argument(
-    "--lambda_A", type=float, default=0.0, help="coefficient for DAG constraint h(A)."
-)
-parser.add_argument(
-    "--c_A", type=float, default=1, help="coefficient for absolute value h(A)."
-)
-parser.add_argument(
-    "--negative_slope", type=float, default=0.2, help="negative_slope for leaky_relu"
-)
-parser.add_argument(
-    "--dropout_rate", type=float, default=0.5, help="rate for discriminator dropout"
-)
-parser.add_argument(
-    "--noise", type=float, default=1e-20, help="amount of noise for the ANM"
-)
+parser.add_argument( "--graph_threshold", type=float, default=0.3, help="threshold for learned adjacency matrix binarization") # 0.3 is good, 0.2 is error prune
+parser.add_argument("--tau_A", type=float, default=0.0, help="coefficient for L-1 norm of A.")
+parser.add_argument("--lambda_A", type=float, default=0.0, help="coefficient for DAG constraint h(A).")
+parser.add_argument("--c_A", type=float, default=1, help="coefficient for absolute value h(A).")
+parser.add_argument("--negative_slope", type=float, default=0.2, help="negative_slope for leaky_relu")
+parser.add_argument("--dropout_rate", type=float, default=0.5, help="rate for discriminator dropout")
+parser.add_argument("--noise", type=float, default=1e-20, help="amount of noise for the ANM")
 
 
 parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-parser.add_argument(
-    "--epochs", type=int, default=300, help="Number of epochs for step 1 to train."
-)
-parser.add_argument(
-    "--epochs2", type=int, default=600, help="Number of epochs for step 2 to train."
-)
-parser.add_argument(
-    "--batch_size",
-    type=int,
-    default=100,  # note: should be divisible by sample size, otherwise throw an error, default is 100 but better use 500 as it is faster and accuracy is preserved
-    help="Number of samples per batch.",
-)
-parser.add_argument(
-    "--lr",
-    type=float,
-    default=3e-3,  # basline rate = 1e-3
-    help="Initial learning rate.",
-)
-parser.add_argument(
-    "--encoder-hidden", type=int, default=64, help="Number of hidden units."
-)
-parser.add_argument(
-    "--decoder-hidden", type=int, default=64, help="Number of hidden units."
-)
-parser.add_argument(
-    "--k_max_iter",
-    type=int,
-    default=1e2,
-    help="the max iteration number for searching lambda and c",
-)
-parser.add_argument(
-    "--mul1", default=0.01, type=float, help="multiplier for the L1_Loss"
-)
-parser.add_argument(
-    "--mul2", default=0.01, type=float, help="multiplier for the L2_Loss"
-)
-parser.add_argument(
-    "--alpha", default=0, type=float, help="alpha multiplier for the MMD"
-)
+parser.add_argument("--epochs", type=int, default=300, help="Number of epochs for step 1 to train.")
+parser.add_argument("--epochs2", type=int, default=2400, help="Number of epochs for step 2 to train.")
+parser.add_argument("--batch_size", type=int, default=1000,  help="Number of samples per batch.") # note: should be divisible by sample size, otherwise throw an error
+parser.add_argument("--lr", type=float, default=3e-3, help="Initial learning rate.") # basline rate = 1e-3
+parser.add_argument("--encoder-hidden", type=int, default=64, help="Number of hidden units.")
+parser.add_argument("--decoder-hidden", type=int, default=64, help="Number of hidden units.")
+parser.add_argument("--k_max_iter", type=int, default=1e2, help="the max iteration number for searching lambda and c")
+parser.add_argument("--mul1", default=0.01, type=float, help="multiplier for the L1_Loss")
+parser.add_argument("--mul2", default=0.01, type=float, help="multiplier for the L2_Loss")
+parser.add_argument("--alpha", default=0, type=float, help="alpha multiplier for the MMD")
 
-parser.add_argument(
-    "--suffix",
-    type=str,
-    default="_springs5",
-    help='Suffix for training data (e.g. "_charged".',
-)
-parser.add_argument(
-    "--h_tol", type=float, default=1e-8, help="the tolerance of error of h(A) to zero"
-)
-parser.add_argument(
-    "--lr-decay",
-    type=int,
-    default=200,
-    help="After how epochs to decay LR by a factor of gamma.",
-)
+parser.add_argument("--suffix", type=str, default="_springs5", help='Suffix for training data (e.g. "_charged".')
+parser.add_argument("--h_tol", type=float, default=1e-8, help="the tolerance of error of h(A) to zero")
+parser.add_argument("--lr-decay", type=int, default=200, help="After how epochs to decay LR by a factor of gamma.")
 parser.add_argument("--gamma", type=float, default=1.0, help="LR decay factor.")
-parser.add_argument(
-    "--temp", type=float, default=1.0, help="Temperature for Gumbel softmax."
-)
-parser.add_argument(
-    "--hard",
-    action="store_true",
-    default=False,
-    help="Uses discrete samples in training forward pass.",
-)
+parser.add_argument("--temp", type=float, default=1.0, help="Temperature for Gumbel softmax.")
+parser.add_argument("--hard", action="store_true", default=False, help="Uses discrete samples in training forward pass.")
 
 args = parser.parse_args()
 print(args)
@@ -274,16 +101,13 @@ print(args)
 # controlls randomness of the entire program
 torch.manual_seed(args.seed)
 
-
 def main():
 
     t = time.time()
 
     if args.data_type == "real":
 
-        train_loader, data_variable_size, columns = load_data(
-            args, args.batch_size, args.suffix
-        )
+        train_loader, data_variable_size, columns = load_data(args, args.batch_size, args.suffix)
 
         # add adjacency matrix A
         num_nodes = data_variable_size
@@ -297,9 +121,7 @@ def main():
 
     elif args.data_type == "benchmark":
 
-        train_loader, data_variable_size, ground_truth_G, num_cats = load_data(
-            args, args.batch_size, args.suffix
-        )
+        train_loader, data_variable_size, ground_truth_G, num_cats = load_data(args, args.batch_size, args.suffix)
 
         # add adjacency matrix A
         num_nodes = data_variable_size
@@ -309,9 +131,7 @@ def main():
 
         causal_graph, data = aae_wgan_gp.fit(train_loader, ground_truth_G)
 
-        BIC_score = compute_BiCScore(
-            np.asarray(nx.to_numpy_matrix(ground_truth_G)), causal_graph
-        )
+        BIC_score = compute_BiCScore(np.asarray(nx.to_numpy_matrix(ground_truth_G)), causal_graph)
         print("BIC_score: " + str(BIC_score))
 
         # draw_dag(causal_graph, args.data_type)
@@ -339,26 +159,17 @@ def main():
         adj_A = np.zeros((num_nodes, num_nodes))
 
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
-        causal_graph, data = aae_wgan_gp.fit(train_data, ground_truth)
-
-        # draw_dag(causal_graph, args.data_type)
+        causal_graph, real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, train_data, nx.to_numpy_array(ground_truth))
+        acc = aae_wgan_gp.count_accuracy(nx.to_numpy_array(ground_truth), causal_graph != 0)
+        print("threshold 0.3, Accuracy:",acc)
 
     if args.export:
-        assert (
-            args.export_directory != ""
-        ), "Export directory not specified! Please specify an export directory!"
-        pd.DataFrame(causal_graph).to_csv(
-            os.path.join(args.export_directory, "adjacency_matrix.csv"), index=False
-        )
-        # data.to_csv(
-        #     os.path.join(args.export_directory, "generated_data.csv"), index=False
-        # )
+        assert (args.export_directory != ""), "Export directory not specified! Please specify an export directory!"
+        pd.DataFrame(causal_graph).to_csv(os.path.join(args.export_directory, "adjacency_matrix.csv"), index=False)
+        real_df.to_csv(os.path.join(args.export_directory, "real_data.csv"), index=False)
+        fake_df.to_csv(os.path.join(args.export_directory, "generated_data.csv"), index=False)
 
-    print(
-        "Programm finished in: "
-        + str(time.strftime("%H:%M:%S", time.gmtime(time.time() - t)))
-    )
-
+    print("Programm finished in: "+ str(time.strftime("%H:%M:%S", time.gmtime(time.time() - t))))
 
 if __name__ == "__main__":
     main()
