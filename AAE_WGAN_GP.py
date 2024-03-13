@@ -541,10 +541,10 @@ class AAE_WGAN_GP(nn.Module):
 
     def fit(self, model, discriminator, generator, discriminator1, train_data, ground_truth):
         causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
-        real_df, fake_df = self.sample(train_data)
+        real_df, fake_df = self.sample(train_data, causal_graph)
         return causal_graph, real_df, fake_df
     
-    def generateSyntheticData(self, dims, generator, graph_threshold=0.05, device="cpu"):
+    def generateSyntheticData(self, dims, generator, causal_graph, graph_threshold=0.05, device="cpu"):
 
         batch_size, n_nodes, z_dim = dims[0], dims[1], dims[2]
 
@@ -552,9 +552,7 @@ class AAE_WGAN_GP(nn.Module):
         params = [p for p in generator.fc2.parameters()]
         weights, biases = params[0], params[1]
 
-        A = generator.fc1_to_adj()
-        A[np.abs(A) < graph_threshold] = 0
-        G = nx.DiGraph(A)
+        G = nx.DiGraph(causal_graph)
         ordered_vertices = list(nx.topological_sort(G))
         assert len(ordered_vertices) == n_nodes
         print("Ordered nodes: {}".format(ordered_vertices))
@@ -584,21 +582,20 @@ class AAE_WGAN_GP(nn.Module):
 
         return pred_X
 
-    def sample(self, train_loader, columns=None):
+    def sample(self, train_loader, causal_graph, columns=None):
 
         real_tensor_data = train_loader.dataset.tensors[0].squeeze()
         real_df = pd.DataFrame(real_tensor_data.numpy(), columns=columns)
         real_df["data"] = "real"
 
-        weights = "./generator.pth"
         n_synth = real_df.shape[0]
         num_nodes = real_df.shape[1] - 1
 
         generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
-        generator.load_state_dict(torch.load(weights))
+        _, generator, _ = self.load_model()
         generator.eval()
 
-        synthetic_data = self.generateSyntheticData(dims=[n_synth, num_nodes, 1], generator=generator)
+        synthetic_data = self.generateSyntheticData(dims=[n_synth, num_nodes, 1], generator=generator, causal_graph=causal_graph)
 
         fake_df = pd.DataFrame(synthetic_data.cpu().numpy(), columns=columns)
         fake_df["data"] = "fake"
