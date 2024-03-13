@@ -4,21 +4,6 @@ Created on Mon May 10 18:37:53 2021
 @author: Hristo Petkov
 """
 
-"""
-@inproceedings{yu2019dag,
-  title={DAG-GNN: DAG Structure Learning with Graph Neural Networks},
-  author={Yue Yu, Jie Chen, Tian Gao, and Mo Yu},
-  booktitle={Proceedings of the 36th International Conference on Machine Learning},
-  year={2019}
-}
-@inproceedings{xu2019modeling,
-  title={Modeling Tabular data using Conditional GAN},
-  author={Xu, Lei and Skoularidou, Maria and Cuesta-Infante, Alfredo and Veeramachaneni, Kalyan},
-  booktitle={Advances in Neural Information Processing Systems},
-  year={2019}
-}
-"""
-
 import time
 import torch
 import math
@@ -35,10 +20,6 @@ from torch.autograd import Variable
 from torch import optim
 from torch.optim import lr_scheduler
 from torch.nn import Linear, Sequential, LeakyReLU, Dropout, BatchNorm1d
-#from Utils import preprocess_adj_new, preprocess_adj_new1
-#from Utils import nll_gaussian, kl_gaussian_sem, nll_catogrical
-#from Utils import _h_A
-#from Utils import count_accuracy
 from torch.utils.data import DataLoader
 
 
@@ -389,8 +370,8 @@ class AAE_WGAN_GP(nn.Module):
         h_new = None
         optimizer = optim.Adam(model.parameters(), lr=self.lr)
         optimizerD = optim.Adam(discriminator.parameters(), lr=self.lr)
-        optimizerG = optim.Adam(generator.fc2.parameters(), lr=self.lr)
-        optimizerD1 = optim.Adam(discriminator1.parameters(), lr=self.lr)
+        optimizerG = optim.Adam(generator.fc2.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
+        optimizerD1 = optim.Adam(discriminator1.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         while rho < rho_max:
             for epoch in range(self.epochs):
                 t = time.time()
@@ -559,11 +540,8 @@ class AAE_WGAN_GP(nn.Module):
         return best_shd_graph
 
     def fit(self, model, discriminator, generator, discriminator1, train_data, ground_truth):
-
         causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
-
         real_df, fake_df = self.sample(train_data)
-
         return causal_graph, real_df, fake_df
     
     def generateSyntheticData(self, dims, generator, graph_threshold=0.05, device="cpu"):
