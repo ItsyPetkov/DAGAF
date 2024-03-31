@@ -23,12 +23,52 @@ from torch.nn import Linear, Sequential, LeakyReLU, Dropout, BatchNorm1d
 from torch.utils.data import DataLoader
 
 
+class FullyConnectedNet(nn.Module):
+    def __init__(self, d, bias=True):
+        super(FullyConnectedNet, self).__init__()
+
+        self.d = d
+
+        self.fc1_pos = nn.Linear(d, d * 10, bias=bias)
+        self.fc1_neg = nn.Linear(d, d * 10, bias=bias)
+        self.fc1_pos.weight.bounds = self._bounds()
+        self.fc1_neg.weight.bounds = self._bounds()
+
+        self.fc2 = nn.Linear(d * 10, d * 10, bias=bias)
+        self.fc3 = nn.Linear(d * 10, d, bias=bias)
+        self.init_weights()
+    
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, Linear):
+                nn.init.xavier_normal_(m.weight.data)
+                m.bias.data.fill_(0.0)
+            elif isinstance(m, BatchNorm1d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+    def _bounds(self):
+        d = self.d
+        bounds = []
+        for j in range(d):
+            for m in range(10):
+                for i in range(d):
+                    if i == j:
+                        bound = (0, 0)
+                    else:
+                        bound = (0, None)
+                    bounds.append(bound)
+        return bounds
+
+    def forward(self, x):
+        x = self.fc1_pos(x) - self.fc1_neg(x)
+        x = torch.sigmoid(self.fc2(x))
+        return self.fc3(x)
+
 class Discriminator(nn.Module):
     """Discriminator module."""
 
-    def __init__(
-        self, input_dim, discriminator_dim, negative_slope, dropout_rate, pac=10
-    ):
+    def __init__(self, input_dim, discriminator_dim, negative_slope, dropout_rate, pac=10):
         super(Discriminator, self).__init__()
         dim = input_dim * pac
         self.pac = pac
@@ -53,9 +93,7 @@ class Discriminator(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-    def calc_gradient_penalty(
-        self, real_data, fake_data, device="cpu", pac=10, lambda_=10
-    ):
+    def calc_gradient_penalty(self, real_data, fake_data, device="cpu", pac=10, lambda_=10):
 
         # reshape data
         real_data = real_data.squeeze()
@@ -319,6 +357,7 @@ class AAE_WGAN_GP(nn.Module):
         self.mul1 = args.mul1
         self.mul2 = args.mul2
         self.alpha = args.alpha
+        self.pnl = args.pnl
 
         self.lr_decay = args.lr_decay
         self.gamma = args.gamma
@@ -330,11 +369,11 @@ class AAE_WGAN_GP(nn.Module):
         self.graph_linear_type = args.graph_linear_type
 
         self.model = Generator(dims=[self.data_variable_size,10,1], bias=True)
+        self.fcn = FullyConnectedNet(self.data_variable_size, bias=True)
         self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
         self.discriminator1 = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
         self.generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
         self.step = 1
-        
 
     def compute_kernel(self, x, y):
         x_size = x.size(0)
@@ -365,13 +404,15 @@ class AAE_WGAN_GP(nn.Module):
         loss = 0.5 / n * torch.sum((output - target) ** 2)
         return loss
     
-    def dual_ascent_step(self, model, discriminator, generator, discriminator1, X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth=None):
+    def dual_ascent_step(self, model, discriminator, generator, discriminator1, fcn,  X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth=None):
         """Perform one step of dual ascent in augmented Lagrangian."""
         h_new = None
         optimizer = optim.Adam(model.parameters(), lr=self.lr)
         optimizerD = optim.Adam(discriminator.parameters(), lr=self.lr)
         optimizerG = optim.Adam(generator.fc2.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerD1 = optim.Adam(discriminator1.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
+        optimizerFCN = optim.Adam(fcn.parameters(), lr=self.lr)
+
         while rho < rho_max:
             for epoch in range(self.epochs):
                 t = time.time()
@@ -400,8 +441,9 @@ class AAE_WGAN_GP(nn.Module):
                         data, relations = (Variable(data.squeeze()), Variable(relations))
                         optimizer.zero_grad()
                         X_hat = model(data)
+                        #y2_hat = fcn(data)
                         kld_loss = self.kl_gaussian_sem(X_hat)
-                        mmd_loss = self.compute_mmd(X_hat, data.squeeze())
+                        mmd_loss = self.compute_mmd(X_hat, data)
                         loss = self.squared_loss(X_hat, data) + kld_loss + mmd_loss
                         h_val = model.h_func()
                         penalty = 0.5 * rho * h_val * h_val + alpha * h_val
@@ -418,7 +460,20 @@ class AAE_WGAN_GP(nn.Module):
                         loss_g = -torch.mean(y_fake)
                         loss_g.backward()
                         optimizer.step()
-
+                        ###############################################
+                        # (1.4) Update FCN network parameters with MSE
+                        ###############################################
+                        if self.pnl:
+                            optimizerFCN.zero_grad()
+                            optimizer.zero_grad()
+                            X_tilde = fcn(X_hat)
+                            #kld_loss_2 = self.kl_gaussian_sem(X_tilde)
+                            #mmd_loss_2 = self.compute_mmd(X_tilde, data)
+                            rec_loss = self.squared_loss(X_tilde, data) #+ mmd_loss_2 + kld_loss_2
+                            rec_loss.backward()
+                            optimizerFCN.step()
+                            optimizer.step()
+                        
                     ###################################################################
                     # (2) Produce diverse samples using the WGAN architecture
                     ###################################################################
@@ -521,6 +576,7 @@ class AAE_WGAN_GP(nn.Module):
                         discriminator: nn.Module,
                         generator: nn.Module,
                         discriminator1: nn.Module,
+                        fcn: nn.Module,
                         X: np.ndarray,
                         ground_truth: np.ndarray = None,
                         lambda1: float = 0.,
@@ -532,15 +588,15 @@ class AAE_WGAN_GP(nn.Module):
         rho, alpha, h = 1.0, 0.0, np.inf
         best_mse_loss, best_shd, best_epoch, best_shd_graph  = np.inf, np.inf, 0, []
         for _ in range(max_iter):
-            rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, X, lambda1, lambda2,
+            rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, fcn, X, lambda1, lambda2,
                                             rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth)
             if h <= h_tol or rho >= rho_max:
                 break
         best_shd_graph[np.abs(best_shd_graph) < w_threshold] = 0
         return best_shd_graph
 
-    def fit(self, model, discriminator, generator, discriminator1, train_data, ground_truth):
-        causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
+    def fit(self, model, discriminator, generator, discriminator1, fcn, train_data, ground_truth):
+        causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, fcn, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
         real_df, fake_df = self.sample(train_data, causal_graph)
         return causal_graph, real_df, fake_df
     
