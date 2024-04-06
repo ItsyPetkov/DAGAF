@@ -23,21 +23,25 @@ from torch.nn import Linear, Sequential, LeakyReLU, Dropout, BatchNorm1d
 from torch.utils.data import DataLoader
 
 
-class FullyConnectedNet(nn.Module):
-    def __init__(self, d, bias=True):
-        super(FullyConnectedNet, self).__init__()
+class MLP(nn.Module):
 
-        self.d = d
+    def __init__(self, n_inputs, n_outputs, n_layers=1, n_units=100):
+        super(MLP, self).__init__()
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.n_layers = n_layers
+        self.n_units = n_units
 
-        self.fc1_pos = nn.Linear(d, d * 10, bias=bias)
-        self.fc1_neg = nn.Linear(d, d * 10, bias=bias)
-        self.fc1_pos.weight.bounds = self._bounds()
-        self.fc1_neg.weight.bounds = self._bounds()
-
-        self.fc2 = nn.Linear(d * 10, d * 10, bias=bias)
-        self.fc3 = nn.Linear(d * 10, d, bias=bias)
+        # create layers
+        layers = [nn.Linear(n_inputs, n_units)]
+        for _ in range(n_layers):
+            layers.append(nn.ReLU())
+            layers.append(nn.Linear(n_units, n_units))
+        layers.append(nn.ReLU())
+        layers.append(nn.Linear(n_units, n_outputs))
+        self.layers = nn.Sequential(*layers)
         self.init_weights()
-    
+
     def init_weights(self):
         for m in self.modules():
             if isinstance(m, Linear):
@@ -47,23 +51,9 @@ class FullyConnectedNet(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-    def _bounds(self):
-        d = self.d
-        bounds = []
-        for j in range(d):
-            for m in range(10):
-                for i in range(d):
-                    if i == j:
-                        bound = (0, 0)
-                    else:
-                        bound = (0, None)
-                    bounds.append(bound)
-        return bounds
-
     def forward(self, x):
-        x = self.fc1_pos(x) - self.fc1_neg(x)
-        x = torch.sigmoid(self.fc2(x))
-        return self.fc3(x)
+        x = self.layers(x)
+        return x
 
 class Discriminator(nn.Module):
     """Discriminator module."""
@@ -369,7 +359,7 @@ class AAE_WGAN_GP(nn.Module):
         self.graph_linear_type = args.graph_linear_type
 
         self.model = Generator(dims=[self.data_variable_size,10,1], bias=True)
-        self.fcn = FullyConnectedNet(self.data_variable_size, bias=True)
+        self.mlp = MLP(n_inputs=self.data_variable_size, n_outputs=self.data_variable_size, n_layers=3, n_units=self.data_variable_size*10)
         self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
         self.discriminator1 = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
         self.generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
@@ -404,14 +394,14 @@ class AAE_WGAN_GP(nn.Module):
         loss = 0.5 / n * torch.sum((output - target) ** 2)
         return loss
     
-    def dual_ascent_step(self, model, discriminator, generator, discriminator1, fcn,  X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth=None):
+    def dual_ascent_step(self, model, discriminator, generator, discriminator1, mlp,  X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth=None):
         """Perform one step of dual ascent in augmented Lagrangian."""
         h_new = None
         optimizer = optim.Adam(model.parameters(), lr=self.lr)
         optimizerD = optim.Adam(discriminator.parameters(), lr=self.lr)
         optimizerG = optim.Adam(generator.fc2.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerD1 = optim.Adam(discriminator1.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
-        optimizerFCN = optim.Adam(fcn.parameters(), lr=self.lr)
+        optimizerMLP = optim.Adam(mlp.parameters(), lr=self.lr)
 
         while rho < rho_max:
             for epoch in range(self.epochs):
@@ -441,9 +431,8 @@ class AAE_WGAN_GP(nn.Module):
                         data, relations = (Variable(data.squeeze()), Variable(relations))
                         optimizer.zero_grad()
                         X_hat = model(data)
-                        #y2_hat = fcn(data)
                         kld_loss = self.kl_gaussian_sem(X_hat)
-                        mmd_loss = self.compute_mmd(X_hat, data)
+                        mmd_loss = self.compute_mmd(X_hat, data)  
                         loss = self.squared_loss(X_hat, data) + kld_loss + mmd_loss
                         h_val = model.h_func()
                         penalty = 0.5 * rho * h_val * h_val + alpha * h_val
@@ -460,18 +449,16 @@ class AAE_WGAN_GP(nn.Module):
                         loss_g = -torch.mean(y_fake)
                         loss_g.backward()
                         optimizer.step()
-                        ###############################################
-                        # (1.4) Update FCN network parameters with MSE
-                        ###############################################
+                        #####################################################################
+                        # (1.4) Update MLP network parameters with MSE (for PNL models only)
+                        #####################################################################
                         if self.pnl:
-                            optimizerFCN.zero_grad()
+                            optimizerMLP.zero_grad()
                             optimizer.zero_grad()
-                            X_tilde = fcn(X_hat)
-                            #kld_loss_2 = self.kl_gaussian_sem(X_tilde)
-                            #mmd_loss_2 = self.compute_mmd(X_tilde, data)
-                            rec_loss = self.squared_loss(X_tilde, data) #+ mmd_loss_2 + kld_loss_2
-                            rec_loss.backward()
-                            optimizerFCN.step()
+                            Y_hat = mlp(data)
+                            pnl_loss = self.squared_loss(X_hat, Y_hat)
+                            pnl_loss.backward()
+                            optimizerMLP.step()
                             optimizer.step()
                         
                     ###################################################################
@@ -576,7 +563,7 @@ class AAE_WGAN_GP(nn.Module):
                         discriminator: nn.Module,
                         generator: nn.Module,
                         discriminator1: nn.Module,
-                        fcn: nn.Module,
+                        mlp: nn.Module,
                         X: np.ndarray,
                         ground_truth: np.ndarray = None,
                         lambda1: float = 0.,
@@ -588,15 +575,15 @@ class AAE_WGAN_GP(nn.Module):
         rho, alpha, h = 1.0, 0.0, np.inf
         best_mse_loss, best_shd, best_epoch, best_shd_graph  = np.inf, np.inf, 0, []
         for _ in range(max_iter):
-            rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, fcn, X, lambda1, lambda2,
+            rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, mlp, X, lambda1, lambda2,
                                             rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth)
             if h <= h_tol or rho >= rho_max:
                 break
         best_shd_graph[np.abs(best_shd_graph) < w_threshold] = 0
         return best_shd_graph
 
-    def fit(self, model, discriminator, generator, discriminator1, fcn, train_data, ground_truth):
-        causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, fcn, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
+    def fit(self, model, discriminator, generator, discriminator1, mlp, train_data, ground_truth):
+        causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, mlp, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
         real_df, fake_df = self.sample(train_data, causal_graph)
         return causal_graph, real_df, fake_df
     

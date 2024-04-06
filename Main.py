@@ -50,15 +50,15 @@ parser.add_argument("--verbose", type=int, default=1, help="used to control the 
 
 # -----------data parameters ------
 # configurations
-parser.add_argument("--synthesize", type=int, default=0, help="Flag for synthesing synthetic data")
-parser.add_argument("--pnl", type=int, default=1, help="Flag for Post-Non-Linear model")
+parser.add_argument("--synthesize", type=int, default=1, help="Flag for synthesing synthetic data")
+parser.add_argument("--pnl", type=int, default=0, help="Flag for Post-Non-Linear model") # otherwise Additive Noise Model is assumed
 parser.add_argument("--data_type", type=str, default="synthetic", choices=["synthetic", "benchmark", "real"], help="choosing which experiment to do.")
 parser.add_argument("--data_sample_size", type=int, default=5000, help="the number of samples of data")
 parser.add_argument("--data_variable_size", type=int, default=10, help="the number of variables in synthetic generated data")
 parser.add_argument("--graph_type", type=str, default="erdos-renyi", help="the type of DAG graph by generation method")
 parser.add_argument("--graph_degree", type=int, default=3, help="the number of degree in generated DAG graph")
 parser.add_argument("--graph_sem_type", type=str, default="linear-gauss", help="the structure equation model (SEM) parameter type")
-parser.add_argument("--graph_linear_type", type=str, default="post_nonlinear_2", help="the synthetic data type: linear -> linear SEM, nonlinear_1 -> x=Acos(x+1)+z," 
+parser.add_argument("--graph_linear_type", type=str, default="nonlinear_2", help="the synthetic data type: linear -> linear SEM, nonlinear_1 -> x=Acos(x+1)+z," 
                     + "nonlinear_2 -> x=2sin(A(x+0.5))+A(x+0.5)+z" + 'post_nonlinear_1 -> x=tanh(Acos(x+1)+z), post_nonlinear_2 -> x=tanh(2sin(A(x+0.5))+A(x+0.5)+z)')
 parser.add_argument("--edge-types", type=int, default=2, help="The number of edge types to infer.")
 parser.add_argument("--x_dims", type=int, default=1, help="The number of input dimensions: default 1.") # vector case: need to be equal to the last dimension of vector data to work
@@ -159,7 +159,7 @@ def main():
         adj_A = np.zeros((num_nodes, num_nodes))
 
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
-        causal_graph, real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.fcn, train_data, nx.to_numpy_array(ground_truth))
+        causal_graph, real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp, train_data, nx.to_numpy_array(ground_truth))
         acc = aae_wgan_gp.count_accuracy(nx.to_numpy_array(ground_truth), causal_graph != 0)
         print("threshold 0.3, Accuracy:",acc)
 
