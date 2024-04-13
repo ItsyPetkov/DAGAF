@@ -399,7 +399,7 @@ class AAE_WGAN_GP(nn.Module):
         """Perform one step of dual ascent in augmented Lagrangian."""
         h_new = None
         optimizer = optim.Adam(model.parameters(), lr=self.lr)
-        optimizerD = optim.Adam(discriminator.parameters(), lr=self.lr)
+        optimizerD = optim.Adam(discriminator.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerG = optim.Adam(generator.fc2.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerD1 = optim.Adam(discriminator1.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerMLPI = optim.Adam(mlp_inverse.parameters(), lr=self.lr)
@@ -649,10 +649,13 @@ class AAE_WGAN_GP(nn.Module):
         num_nodes = real_df.shape[1] - 1
 
         generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
-        _, generator, _ = self.load_model()
+        _, generator, _, mlp = self.load_model()
         generator.eval()
 
         synthetic_data = self.generateSyntheticData(dims=[n_synth, num_nodes, 1], generator=generator, causal_graph=causal_graph)
+
+        if self.pnl:
+            mlp.eval()
 
         fake_df = pd.DataFrame(synthetic_data.cpu().numpy(), columns=columns)
         fake_df["data"] = "fake"
@@ -720,9 +723,10 @@ class AAE_WGAN_GP(nn.Module):
     
     def save_model(self):
         assert (self.save_directory != ""), "Saving directory not specified! Please specify a saving directory!"
-        torch.save(self.model.state_dict(), os.path.join(self.save_directory, "MLP.pth"))
+        torch.save(self.model.state_dict(), os.path.join(self.save_directory, "model.pth"))
         torch.save(self.generator.state_dict(), os.path.join(self.save_directory, "generator.pth"))
         torch.save(self.discriminator.state_dict(), os.path.join(self.save_directory, "discriminator.pth"))
+        torch.save(self.mlp.state_dict(), os.path.join(self.save_directory, "MLP.pth"))
 
     def load_model(self):
         assert (self.load_directory != ""), "Loading directory not specified! Please specify a loading directory!"
@@ -730,12 +734,14 @@ class AAE_WGAN_GP(nn.Module):
         model = Generator(dims=[self.data_variable_size,10,1], bias=True)
         discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
         generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
+        mlp = MLP(n_inputs=self.data_variable_size, n_outputs=self.data_variable_size, n_layers=3, n_units=self.data_variable_size*10)
 
-        model.load_state_dict(torch.load(os.path.join(self.load_directory, "MLP.pth")))
+        model.load_state_dict(torch.load(os.path.join(self.load_directory, "model.pth")))
         generator.load_state_dict(torch.load(os.path.join(self.load_directory, "generator.pth")))
         discriminator.load_state_dict(torch.load(os.path.join(self.load_directory, "discriminator.pth")))
+        mlp.load_state_dict(torch.load(os.path.join(self.load_directory, "MLP.pth")))
 
-        return model, generator, discriminator
+        return model, generator, discriminator, mlp
 
 
     
