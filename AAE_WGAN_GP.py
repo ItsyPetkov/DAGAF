@@ -360,6 +360,7 @@ class AAE_WGAN_GP(nn.Module):
 
         self.model = Generator(dims=[self.data_variable_size,10,1], bias=True)
         self.mlp_inverse = MLP(n_inputs=self.data_variable_size, n_outputs=self.data_variable_size, n_layers=3, n_units=self.data_variable_size*10)
+        self.mlp = MLP(n_inputs=self.data_variable_size, n_outputs=self.data_variable_size, n_layers=3, n_units=self.data_variable_size*10)
         self.discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
         self.discriminator1 = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
         self.generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
@@ -394,7 +395,7 @@ class AAE_WGAN_GP(nn.Module):
         loss = 0.5 / n * torch.sum((output - target) ** 2)
         return loss
     
-    def dual_ascent_step(self, model, discriminator, generator, discriminator1, mlp_inverse,  X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth=None):
+    def dual_ascent_step(self, model, discriminator, generator, discriminator1, mlp_inverse, mlp, X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth=None):
         """Perform one step of dual ascent in augmented Lagrangian."""
         h_new = None
         optimizer = optim.Adam(model.parameters(), lr=self.lr)
@@ -402,6 +403,7 @@ class AAE_WGAN_GP(nn.Module):
         optimizerG = optim.Adam(generator.fc2.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerD1 = optim.Adam(discriminator1.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerMLPI = optim.Adam(mlp_inverse.parameters(), lr=self.lr)
+        optimizerMLP = optim.Adam(mlp.parameters(), lr=self.lr)
 
         while rho < rho_max:
             for epoch in range(self.epochs):
@@ -491,8 +493,19 @@ class AAE_WGAN_GP(nn.Module):
                     X_hat = generator(data)
                     y_fake = discriminator1(X_hat)
                     loss_g = -torch.mean(y_fake)
-                    loss_g.backward()
+                    loss_g.backward(retain_graph=True)
                     optimizerG.step()
+                    #####################################################################
+                    # (2.3) Update MLP network parameters with MSE (for PNL models only)
+                    #####################################################################
+                    if self.pnl:
+                        optimizerG.zero_grad()
+                        optimizerMLP.zero_grad()
+                        X_tilde = mlp(X_hat)
+                        pnl_g_loss = self.squared_loss(X_tilde, data)
+                        pnl_g_loss.backward()
+                        optimizerG.step()
+                        optimizerMLP.step()
                     self.step = 1
                 
                 W_est = model.fc1_to_adj()
@@ -564,6 +577,7 @@ class AAE_WGAN_GP(nn.Module):
                         generator: nn.Module,
                         discriminator1: nn.Module,
                         mlp_inverse: nn.Module,
+                        mlp: nn.Module,
                         X: np.ndarray,
                         ground_truth: np.ndarray = None,
                         lambda1: float = 0.,
@@ -575,15 +589,15 @@ class AAE_WGAN_GP(nn.Module):
         rho, alpha, h = 1.0, 0.0, np.inf
         best_mse_loss, best_shd, best_epoch, best_shd_graph  = np.inf, np.inf, 0, []
         for _ in range(max_iter):
-            rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, mlp_inverse, X, lambda1, lambda2,
+            rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, mlp_inverse, mlp, X, lambda1, lambda2,
                                             rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth)
             if h <= h_tol or rho >= rho_max:
                 break
         best_shd_graph[np.abs(best_shd_graph) < w_threshold] = 0
         return best_shd_graph
 
-    def fit(self, model, discriminator, generator, discriminator1, mlp_inverse, train_data, ground_truth):
-        causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, mlp_inverse, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
+    def fit(self, model, discriminator, generator, discriminator1, mlp_inverse, mlp, train_data, ground_truth):
+        causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, mlp_inverse, mlp, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
         real_df, fake_df = self.sample(train_data, causal_graph)
         return causal_graph, real_df, fake_df
     

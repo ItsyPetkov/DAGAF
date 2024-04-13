@@ -34,7 +34,7 @@ parser.add_argument("--verbose", type=int, default=1, help="used to control the 
 
 # -----------data parameters ------
 # configurations
-parser.add_argument("--synthesize", type=int, default=0, help="Flag for synthesing synthetic data")
+parser.add_argument("--synthesize", type=int, default=1, help="Flag for synthesing synthetic data")
 parser.add_argument("--pnl", type=int, default=0, help="Flag for Post-Non-Linear model") # otherwise Additive Noise Model is assumed
 parser.add_argument("--data_type", type=str, default="synthetic", choices=["synthetic", "benchmark", "real"], help="choosing which experiment to do.")
 parser.add_argument("--data_sample_size", type=int, default=5000, help="the number of samples of data")
@@ -143,7 +143,7 @@ def main():
         adj_A = np.zeros((num_nodes, num_nodes))
 
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
-        causal_graph, real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, train_data, nx.to_numpy_array(ground_truth))
+        causal_graph, real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, aae_wgan_gp.mlp, train_data, nx.to_numpy_array(ground_truth))
         acc = aae_wgan_gp.count_accuracy(nx.to_numpy_array(ground_truth), causal_graph != 0)
         print("threshold 0.3, Accuracy:",acc)
 
