@@ -4,21 +4,6 @@ Created on Thu Nov 12 15:13:21 2020
 @author: Hristo Petkov
 """
 
-"""
-@inproceedings{yu2019dag,
-  title={DAG-GNN: DAG Structure Learning with Graph Neural Networks},
-  author={Yue Yu, Jie Chen, Tian Gao, and Mo Yu},
-  booktitle={Proceedings of the 36th International Conference on Machine Learning},
-  year={2019}
-}
-
-@inproceedings{xu2019modeling,
-  title={Modeling Tabular data using Conditional GAN},
-  author={Xu, Lei and Skoularidou, Maria and Cuesta-Infante, Alfredo and Veeramachaneni, Kalyan},
-  booktitle={Advances in Neural Information Processing Systems},
-  year={2019}
-}
-"""
 import torch
 import os
 import math
@@ -410,7 +395,7 @@ def simulate_sem(G: nx.DiGraph,
             elif linear_type == 'nonlinear_2':
                 X[:, j, 0] = 2.*np.sin(eta) + eta + np.random.normal(scale=noise_scale, size=n)
             elif linear_type == 'post_nonlinear_1':
-                X[:, j, 0] = np.tanh(eta + np.random.normal(scale=noise_scale, size=n))
+                X[:, j, 0] = np.sinh(eta + np.random.normal(scale=noise_scale, size=n))
             elif linear_type == 'post_nonlinear_2':
                 X[:, j, 0] = np.tanh(2.*np.sin(eta) + eta + np.random.normal(scale=noise_scale, size=n))
         elif sem_type == 'linear-exp':
