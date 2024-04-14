@@ -605,7 +605,6 @@ class AAE_WGAN_GP(nn.Module):
 
         batch_size, n_nodes, z_dim = dims[0], dims[1], dims[2]
 
-        generator.eval()
         params = [p for p in generator.fc2.parameters()]
         weights, biases = params[0], params[1]
 
@@ -651,11 +650,13 @@ class AAE_WGAN_GP(nn.Module):
         generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
         _, generator, _, mlp = self.load_model()
         generator.eval()
+        mlp.eval()
 
         synthetic_data = self.generateSyntheticData(dims=[n_synth, num_nodes, 1], generator=generator, causal_graph=causal_graph)
 
         if self.pnl:
-            mlp.eval()
+            with torch.no_grad():
+                synthetic_data = mlp(synthetic_data)
 
         fake_df = pd.DataFrame(synthetic_data.cpu().numpy(), columns=columns)
         fake_df["data"] = "fake"
