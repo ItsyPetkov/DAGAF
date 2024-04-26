@@ -34,7 +34,7 @@ parser.add_argument("--verbose", type=int, default=1, help="used to control the 
 
 # -----------data parameters ------
 # configurations
-parser.add_argument("--synthesize", type=int, default=0, help="Flag for synthesing synthetic data")
+parser.add_argument("--synthesize", type=int, default=1, help="Flag for synthesing synthetic data")
 parser.add_argument("--pnl", type=int, default=0, help="Flag for Post-Non-Linear model") # otherwise Additive Noise Model is assumed
 parser.add_argument("--data_type", type=str, default="synthetic", choices=["synthetic", "benchmark", "real"], help="choosing which experiment to do.")
 parser.add_argument("--data_sample_size", type=int, default=5000, help="the number of samples of data")

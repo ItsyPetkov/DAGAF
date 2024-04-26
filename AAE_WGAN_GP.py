@@ -399,12 +399,12 @@ class AAE_WGAN_GP(nn.Module):
         """Perform one step of dual ascent in augmented Lagrangian."""
         h_new = None
         optimizer = optim.Adam(model.parameters(), lr=self.lr)
+        optimizerMLPI = optim.Adam(mlp_inverse.parameters(), lr=self.lr)
         optimizerD = optim.Adam(discriminator.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerG = optim.Adam(generator.fc2.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
         optimizerD1 = optim.Adam(discriminator1.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
-        optimizerMLPI = optim.Adam(mlp_inverse.parameters(), lr=self.lr)
-        optimizerMLP = optim.Adam(mlp.parameters(), lr=self.lr)
-
+        optimizerMLP = optim.Adam(mlp.parameters(), lr=self.lr, betas=(0.5, 0.9), weight_decay=1e-6)
+        
         while rho < rho_max:
             for epoch in range(self.epochs):
                 t = time.time()
@@ -471,59 +471,93 @@ class AAE_WGAN_GP(nn.Module):
                         generator.fc1_neg.weight.copy_(model.fc1_neg.weight)
                         self.step = 2
 
-                    for n in range(self.discriminator_steps):
-                        ###################################################################
-                        # (2.1) Update D network: minimize ||D(x) - D(G(z))|| + GP
-                        ###################################################################
-                        data, relations = (Variable(data.squeeze()), Variable(relations))
-                        optimizerD1.zero_grad()
-                        X_hat = generator(data)
-                        y_fake = discriminator1(X_hat)
-                        y_real = discriminator1(data)
-                        pen = discriminator1.calc_gradient_penalty(data, X_hat)
-                        loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
-                        pen.backward(retain_graph=True)
-                        loss_d.backward()
-                        optimizerD1.step()
-                    ###############################################
-                    # (2.2) Update G network: maximize -D(G(z))
-                    ###############################################
-                    data, relations = (Variable(data.squeeze()), Variable(relations))
-                    optimizerG.zero_grad()
-                    X_hat = generator(data)
-                    y_fake = discriminator1(X_hat)
-                    loss_g = -torch.mean(y_fake)
-                    loss_g.backward(retain_graph=True)
-                    optimizerG.step()
-                    #####################################################################
-                    # (2.3) Update MLP network parameters with MSE (for PNL models only)
-                    #####################################################################
                     if self.pnl:
+                        for n in range(self.discriminator_steps):
+                            ###################################################################
+                            # (2.1) Update D network: minimize ||D(x) - D(G(z))|| + GP
+                            ###################################################################
+                            data, relations = (Variable(data.squeeze()), Variable(relations))
+                            optimizerD1.zero_grad()
+                            X_hat = generator(data)
+                            X_tilde = mlp(X_hat)
+                            y_fake = discriminator1(X_tilde)
+                            y_real = discriminator1(data)
+                            pen = discriminator1.calc_gradient_penalty(data, X_tilde)
+                            loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
+                            pen.backward(retain_graph=True)
+                            loss_d.backward()
+                            optimizerD1.step()
+                        ###############################################
+                        # (2.2) Update G network: maximize -D(G(z))
+                        ###############################################
+                        data, relations = (Variable(data.squeeze()), Variable(relations))
                         optimizerG.zero_grad()
                         optimizerMLP.zero_grad()
+                        X_hat = generator(data)
                         X_tilde = mlp(X_hat)
-                        pnl_g_loss = self.squared_loss(X_tilde, data)
-                        pnl_g_loss.backward()
+                        y_fake = discriminator1(X_tilde)
+                        loss_g = -torch.mean(y_fake)
+                        loss_g.backward()
                         optimizerG.step()
                         optimizerMLP.step()
-                    self.step = 1
+                        self.step = 1
+                    else:
+                        for n in range(self.discriminator_steps):
+                            ###################################################################
+                            # (2.1) Update D network: minimize ||D(x) - D(G(z))|| + GP
+                            ###################################################################
+                            data, relations = (Variable(data.squeeze()), Variable(relations))
+                            optimizerD1.zero_grad()
+                            X_hat = generator(data)
+                            y_fake = discriminator1(X_hat)
+                            y_real = discriminator1(data)
+                            pen = discriminator1.calc_gradient_penalty(data, X_hat)
+                            loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
+                            pen.backward(retain_graph=True)
+                            loss_d.backward()
+                            optimizerD1.step()
+                        ###############################################
+                        # (2.2) Update G network: maximize -D(G(z))
+                        ###############################################
+                        data, relations = (Variable(data.squeeze()), Variable(relations))
+                        optimizerG.zero_grad()
+                        X_hat = generator(data)
+                        y_fake = discriminator1(X_hat)
+                        loss_g = -torch.mean(y_fake)
+                        loss_g.backward()
+                        optimizerG.step()
+                        self.step = 1
                 
                 W_est = model.fc1_to_adj()
                 W_est[np.abs(W_est) < 0.3] = 0
                 acc = self.count_accuracy(ground_truth, W_est != 0)
 
-                if best_shd == np.inf and best_mse_loss == np.inf:
-                    best_shd = acc['shd']
-                    best_mse_loss = self.squared_loss(X_hat, data).item()
-                elif acc['shd'] < best_shd:
-                    best_shd = acc['shd']
-                    best_epoch = epoch
-                    best_shd_graph = W_est 
-                    best_mse_loss = self.squared_loss(X_hat, data).item()
-                elif acc['shd'] == best_shd and self.squared_loss(X_hat, data).item() < best_mse_loss:
-                    best_mse_loss = self.squared_loss(X_hat, data).item()
-                    best_epoch = epoch
-                    self.save_model()
+                if self.pnl:
+                    if best_shd == np.inf and best_mse_loss == np.inf:
+                        best_shd = acc['shd']
+                        best_mse_loss = self.squared_loss(X_tilde, data).item()
+                    elif acc['shd'] < best_shd:
+                        best_shd = acc['shd']
+                        best_epoch = epoch
+                        best_shd_graph = W_est 
+                        best_mse_loss = self.squared_loss(X_tilde, data).item()
+                    elif acc['shd'] == best_shd and self.squared_loss(X_tilde, data).item() < best_mse_loss:
+                        best_mse_loss = self.squared_loss(X_tilde, data).item()
+                        best_epoch = epoch
+                        self.save_model()
+                else:
+                    if best_shd == np.inf and best_mse_loss == np.inf:
+                        best_shd = acc['shd']
+                        best_mse_loss = self.squared_loss(X_hat, data).item()
+                    elif acc['shd'] < best_shd:
+                        best_shd = acc['shd']
+                        best_epoch = epoch
+                        best_shd_graph = W_est 
+                        best_mse_loss = self.squared_loss(X_hat, data).item()
+                    elif acc['shd'] == best_shd and self.squared_loss(X_hat, data).item() < best_mse_loss:
+                        best_mse_loss = self.squared_loss(X_hat, data).item()
+                        best_epoch = epoch
+                        self.save_model() 
 
                 if self.verbose:
                     if ground_truth is not None:
