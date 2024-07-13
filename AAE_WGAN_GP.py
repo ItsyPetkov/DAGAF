@@ -357,6 +357,7 @@ class AAE_WGAN_GP(nn.Module):
         self.save_directory = args.save_directory
         self.load_directory = args.load_directory
         self.graph_linear_type = args.graph_linear_type
+        self.settings = args.settings
 
         self.model = Generator(dims=[self.data_variable_size,10,1], bias=True)
         self.mlp_inverse = MLP(n_inputs=self.data_variable_size, n_outputs=self.data_variable_size, n_layers=3, n_units=self.data_variable_size*10)
@@ -539,7 +540,8 @@ class AAE_WGAN_GP(nn.Module):
                     elif acc['shd'] < best_shd:
                         best_shd = acc['shd']
                         best_epoch = epoch
-                        best_shd_graph = W_est 
+                        best_shd_graph = W_est
+                        np.save("causal_graph.npy", best_shd_graph) 
                         best_mse_loss = self.squared_loss(X_tilde, data).item()
                     elif acc['shd'] == best_shd and self.squared_loss(X_tilde, data).item() < best_mse_loss:
                         best_mse_loss = self.squared_loss(X_tilde, data).item()
@@ -552,7 +554,8 @@ class AAE_WGAN_GP(nn.Module):
                     elif acc['shd'] < best_shd:
                         best_shd = acc['shd']
                         best_epoch = epoch
-                        best_shd_graph = W_est 
+                        best_shd_graph = W_est
+                        np.save("causal_graph.npy", best_shd_graph)  
                         best_mse_loss = self.squared_loss(X_hat, data).item()
                     elif acc['shd'] == best_shd and self.squared_loss(X_hat, data).item() < best_mse_loss:
                         best_mse_loss = self.squared_loss(X_hat, data).item()
@@ -631,9 +634,17 @@ class AAE_WGAN_GP(nn.Module):
         return best_shd_graph
 
     def fit(self, model, discriminator, generator, discriminator1, mlp_inverse, mlp, train_data, ground_truth):
-        causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, mlp_inverse, mlp, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
-        real_df, fake_df = self.sample(train_data, causal_graph)
-        return causal_graph, real_df, fake_df
+        if self.settings == "EP":
+            causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, mlp_inverse, mlp, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
+            real_df, fake_df = self.sample(train_data, causal_graph)
+            return causal_graph, real_df, fake_df
+        elif self.settings == "CSL":
+            causal_graph = self.notears_nonlinear(model, discriminator, generator, discriminator1, mlp_inverse, mlp, train_data, ground_truth, lambda1=0.01, lambda2=0.01)
+            return causal_graph
+        elif self.settings == "DG":
+            real_df, fake_df = self.sample(train_data)
+            return real_df, fake_df
+        
     
     def generateSyntheticData(self, dims, generator, causal_graph, graph_threshold=0.05, device="cpu"):
 
@@ -672,7 +683,7 @@ class AAE_WGAN_GP(nn.Module):
 
         return pred_X
 
-    def sample(self, train_loader, causal_graph, columns=None):
+    def sample(self, train_loader, causal_graph=None, columns=None):
 
         real_tensor_data = train_loader.dataset.tensors[0].squeeze()
         real_df = pd.DataFrame(real_tensor_data.numpy(), columns=columns)
@@ -682,7 +693,10 @@ class AAE_WGAN_GP(nn.Module):
         num_nodes = real_df.shape[1] - 1
 
         generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
-        _, generator, _, mlp = self.load_model()
+        if causal_graph is None:
+            _, generator, _, mlp, causal_graph = self.load_model()
+        else:
+            _, generator, _, mlp, _ = self.load_model()
         generator.eval()
         mlp.eval()
 
@@ -770,13 +784,14 @@ class AAE_WGAN_GP(nn.Module):
         discriminator = Discriminator(self.data_variable_size, (256, 256), self.negative_slope, self.dropout_rate)
         generator = Generator(dims=[self.data_variable_size,10,1], step=2, bias=True)
         mlp = MLP(n_inputs=self.data_variable_size, n_outputs=self.data_variable_size, n_layers=3, n_units=self.data_variable_size*10)
+        causal_graph = np.load("causal_graph.npy")
 
         model.load_state_dict(torch.load(os.path.join(self.load_directory, "model.pth")))
         generator.load_state_dict(torch.load(os.path.join(self.load_directory, "generator.pth")))
         discriminator.load_state_dict(torch.load(os.path.join(self.load_directory, "discriminator.pth")))
         mlp.load_state_dict(torch.load(os.path.join(self.load_directory, "MLP.pth")))
 
-        return model, generator, discriminator, mlp
+        return model, generator, discriminator, mlp, causal_graph
 
 
     

@@ -395,7 +395,7 @@ def simulate_sem(G: nx.DiGraph,
             elif linear_type == 'nonlinear_2':
                 X[:, j, 0] = 2.*np.sin(eta) + eta + np.random.normal(scale=noise_scale, size=n)
             elif linear_type == 'post_nonlinear_1':
-                X[:, j, 0] = np.sinh(eta + np.random.normal(scale=noise_scale, size=n))
+                X[:, j, 0] = np.cosh(eta + np.random.normal(scale=noise_scale, size=n))
             elif linear_type == 'post_nonlinear_2':
                 X[:, j, 0] = np.tanh(2.*np.sin(eta) + eta + np.random.normal(scale=noise_scale, size=n))
         elif sem_type == 'linear-exp':

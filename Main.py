@@ -31,6 +31,8 @@ parser.add_argument("--save_directory", default="", type=str, help="A directory 
 parser.add_argument("--load_directory", default="", type=str, help="A directory to load a trained model from.")
 parser.add_argument("--export_directory", type=str, default="", help="choosing a directory for the output.")
 parser.add_argument("--verbose", type=int, default=1, help="used to control the print statements per epoch.")
+parser.add_argument("--settings", type=str, default="EP", choices=["EP", "CSL", "DG"], help="chosing the setting of the pipeline: EP -> Entire Pipeline," +
+                    "CSL -> Only Causal Structure Learning, DG -> Only Data Generation") #DG needs a learned causal structure before running it!!!
 
 # -----------data parameters ------
 # configurations
@@ -142,16 +144,42 @@ def main():
         num_nodes = args.data_variable_size
         adj_A = np.zeros((num_nodes, num_nodes))
 
+        causal_graph = None
+        real_df = None
+        fake_df = None
+
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
-        causal_graph, real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, aae_wgan_gp.mlp, train_data, nx.to_numpy_array(ground_truth))
-        acc = aae_wgan_gp.count_accuracy(nx.to_numpy_array(ground_truth), causal_graph != 0)
-        print("threshold 0.3, Accuracy:",acc)
+
+        if args.settings == "EP":
+            causal_graph, real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, aae_wgan_gp.mlp, train_data, nx.to_numpy_array(ground_truth))
+            acc = aae_wgan_gp.count_accuracy(nx.to_numpy_array(ground_truth), causal_graph != 0)
+            print("threshold 0.3, Accuracy:",acc)
+            print(" ")
+            print("Real data")
+            print(real_df.head())
+            print(" ")
+            print("Synthetic data")
+            print(fake_df.head())
+        elif args.settings == "CSL":
+            causal_graph = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, aae_wgan_gp.mlp, train_data, nx.to_numpy_array(ground_truth))
+            acc = aae_wgan_gp.count_accuracy(nx.to_numpy_array(ground_truth), causal_graph != 0)
+            print("threshold 0.3, Accuracy:",acc)
+        elif args.settings == "DG":
+            real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, aae_wgan_gp.mlp, train_data, nx.to_numpy_array(ground_truth))
+            print("Real data")
+            print(real_df.head())
+            print(" ")
+            print("Synthetic data")
+            print(fake_df.head())
 
     if args.export:
         assert (args.export_directory != ""), "Export directory not specified! Please specify an export directory!"
-        pd.DataFrame(causal_graph).to_csv(os.path.join(args.export_directory, "adjacency_matrix.csv"), index=False)
-        real_df.to_csv(os.path.join(args.export_directory, "real_data.csv"), index=False)
-        fake_df.to_csv(os.path.join(args.export_directory, "generated_data.csv"), index=False)
+        if causal_graph is not None:
+            pd.DataFrame(causal_graph).to_csv(os.path.join(args.export_directory, "adjacency_matrix.csv"), index=False)
+        if real_df is not None:
+            real_df.to_csv(os.path.join(args.export_directory, "real_data.csv"), index=False)
+        if fake_df is not None:
+            fake_df.to_csv(os.path.join(args.export_directory, "generated_data.csv"), index=False)
 
     print("Programm finished in: "+ str(time.strftime("%H:%M:%S", time.gmtime(time.time() - t))))
 
