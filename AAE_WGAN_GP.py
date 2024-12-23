@@ -21,6 +21,7 @@ from torch import optim
 from torch.optim import lr_scheduler
 from torch.nn import Linear, Sequential, LeakyReLU, Dropout, BatchNorm1d
 from torch.utils.data import DataLoader
+from Utils import plot_history
 
 
 class MLP(nn.Module):
@@ -396,7 +397,7 @@ class AAE_WGAN_GP(nn.Module):
         loss = 0.5 / n * torch.sum((output - target) ** 2)
         return loss
     
-    def dual_ascent_step(self, model, discriminator, generator, discriminator1, mlp_inverse, mlp, X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth=None):
+    def dual_ascent_step(self, model, discriminator, generator, discriminator1, mlp_inverse, mlp, X, lambda1, lambda2, rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, dis1, dis2, gen, ground_truth=None):
         """Perform one step of dual ascent in augmented Lagrangian."""
         h_new = None
         optimizer = optim.Adam(model.parameters(), lr=self.lr)
@@ -485,6 +486,9 @@ class AAE_WGAN_GP(nn.Module):
                             y_real = discriminator1(data)
                             pen = discriminator1.calc_gradient_penalty(data, X_tilde)
                             loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
+                            if epoch % 100 == 0:
+                                dis2.append(torch.mean(y_fake).clone().detach().numpy())
+                                dis1.append(torch.mean(y_real).clone().detach().numpy())
                             pen.backward(retain_graph=True)
                             loss_d.backward()
                             optimizerD1.step()
@@ -498,6 +502,8 @@ class AAE_WGAN_GP(nn.Module):
                         X_tilde = mlp(X_hat)
                         y_fake = discriminator1(X_tilde)
                         loss_g = -torch.mean(y_fake)
+                        if epoch % 100 == 0:
+                            gen.append(loss_g.clone().detach().numpy())
                         loss_g.backward()
                         optimizerG.step()
                         optimizerMLP.step()
@@ -514,6 +520,9 @@ class AAE_WGAN_GP(nn.Module):
                             y_real = discriminator1(data)
                             pen = discriminator1.calc_gradient_penalty(data, X_hat)
                             loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
+                            if epoch % 100 == 0:
+                                dis2.append(torch.mean(y_fake).clone().detach().numpy())
+                                dis1.append(torch.mean(y_real).clone().detach().numpy())
                             pen.backward(retain_graph=True)
                             loss_d.backward()
                             optimizerD1.step()
@@ -525,6 +534,8 @@ class AAE_WGAN_GP(nn.Module):
                         X_hat = generator(data)
                         y_fake = discriminator1(X_hat)
                         loss_g = -torch.mean(y_fake)
+                        if epoch % 100 == 0:
+                            gen.append(loss_g.clone().detach().numpy())
                         loss_g.backward()
                         optimizerG.step()
                         self.step = 1
@@ -625,12 +636,15 @@ class AAE_WGAN_GP(nn.Module):
                         w_threshold: float = 0.3):
         rho, alpha, h = 1.0, 0.0, np.inf
         best_mse_loss, best_shd, best_epoch, best_shd_graph  = np.inf, np.inf, 0, []
+        dis1, dis2, gen = [], [], []
+        X.pin_memory_device = ''
         for _ in range(max_iter):
             rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, mlp_inverse, mlp, X, lambda1, lambda2,
-                                            rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, ground_truth)
+                                            rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, dis1, dis2, gen, ground_truth)
             if h <= h_tol or rho >= rho_max:
                 break
         best_shd_graph[np.abs(best_shd_graph) < w_threshold] = 0
+        plot_history(dis1, dis2, gen)
         return best_shd_graph
 
     def fit(self, model, discriminator, generator, discriminator1, mlp_inverse, mlp, train_data, ground_truth):

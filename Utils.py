@@ -23,7 +23,25 @@ from torch.autograd import Variable
 from FullDataPreProcessor import FullDataPreProcessor
 
 # AAE utility functions
+def plot_history(d1_hist, d2_hist, g_hist):
 
+    min_value = min(min(d1_hist), min(d2_hist), min(g_hist))
+    max_value = max(max(d1_hist), max(d2_hist), max(g_hist))
+
+    y_min = min_value - 0.5 * abs(min_value)
+    y_max = max_value + 0.5 * abs(max_value)
+
+    # plot history    
+    plt.plot(d1_hist, label='crit_real')
+    plt.plot(d2_hist, label='crit_fake')
+    plt.plot(g_hist, label='gen')
+    plt.xlabel('Epochs')  
+    plt.ylabel('Loss values')    
+    plt.title('Wasserstein Distance Over Epochs') 
+    plt.ylim(y_min, y_max)
+    plt.legend() 
+    plt.savefig('plot_line_plot_loss.png')  
+    plt.close()  
 
 def num_categories(labels):
     return len(set(labels))

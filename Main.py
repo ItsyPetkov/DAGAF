@@ -42,7 +42,7 @@ parser.add_argument("--data_type", type=str, default="synthetic", choices=["synt
 parser.add_argument("--data_sample_size", type=int, default=5000, help="the number of samples of data")
 parser.add_argument("--data_variable_size", type=int, default=10, help="the number of variables in synthetic generated data")
 parser.add_argument("--graph_type", type=str, default="erdos-renyi", help="the type of DAG graph by generation method")
-parser.add_argument("--graph_degree", type=int, default=3, help="the number of degree in generated DAG graph")
+parser.add_argument("--graph_degree", type=int, default=2, help="the number of degree in generated DAG graph")
 parser.add_argument("--graph_sem_type", type=str, default="linear-gauss", help="the structure equation model (SEM) parameter type")
 parser.add_argument("--graph_linear_type", type=str, default="nonlinear_2", help="the synthetic data type: linear -> linear SEM, nonlinear_1 -> x=Acos(x+1)+z," 
                     + "nonlinear_2 -> x=2sin(A(x+0.5))+A(x+0.5)+z" + 'post_nonlinear_1 -> x=sinh(Acos(x+1)+z), post_nonlinear_2 -> x=tanh(2sin(A(x+0.5))+A(x+0.5)+z)')
@@ -115,7 +115,27 @@ def main():
 
         aae_wgan_gp = AAE_WGAN_GP(args, adj_A)
 
-        causal_graph, data = aae_wgan_gp.fit(train_loader, ground_truth_G)
+        if args.settings == "EP":
+            causal_graph, real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, aae_wgan_gp.mlp, train_loader, nx.to_numpy_array(ground_truth_G))
+            acc = aae_wgan_gp.count_accuracy(nx.to_numpy_array(ground_truth), causal_graph != 0)
+            print("threshold 0.3, Accuracy:",acc)
+            print(" ")
+            print("Real data")
+            print(real_df.head())
+            print(" ")
+            print("Synthetic data")
+            print(fake_df.head())
+        elif args.settings == "CSL":
+            causal_graph = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, aae_wgan_gp.mlp, train_loader, nx.to_numpy_array(ground_truth_G))
+            acc = aae_wgan_gp.count_accuracy(nx.to_numpy_array(ground_truth), causal_graph != 0)
+            print("threshold 0.3, Accuracy:",acc)
+        elif args.settings == "DG":
+            real_df, fake_df = aae_wgan_gp.fit(aae_wgan_gp.model, aae_wgan_gp.discriminator, aae_wgan_gp.generator, aae_wgan_gp.discriminator1, aae_wgan_gp.mlp_inverse, aae_wgan_gp.mlp, train_loader, nx.to_numpy_array(ground_truth_G))
+            print("Real data")
+            print(real_df.head())
+            print(" ")
+            print("Synthetic data")
+            print(fake_df.head())
 
         BIC_score = compute_BiCScore(np.asarray(nx.to_numpy_matrix(ground_truth_G)), causal_graph)
         print("BIC_score: " + str(BIC_score))
