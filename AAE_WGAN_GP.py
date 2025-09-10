@@ -640,7 +640,6 @@ class AAE_WGAN_GP(nn.Module):
         rho, alpha, h = 1.0, 0.0, np.inf
         best_mse_loss, best_shd, best_epoch, best_shd_graph  = np.inf, np.inf, 0, []
         dis1, dis2, gen = [], [], []
-        X.pin_memory_device = ''
         for _ in range(max_iter):
             rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, mlp_inverse, mlp, X, lambda1, lambda2,
                                             rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, dis1, dis2, gen, ground_truth)
@@ -812,3 +811,4 @@ class AAE_WGAN_GP(nn.Module):
 
 
     
+
