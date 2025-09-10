@@ -545,30 +545,30 @@ class AAE_WGAN_GP(nn.Module):
                 acc = self.count_accuracy(ground_truth, W_est != 0)
 
                 if self.pnl:
-                    if best_shd == np.inf and best_mse_loss == np.inf:
+                    if best_shd == np.inf and best_mse_loss == np.inf and nx.is_directed_acyclic_graph(nx.DiGraph(W_est)):
                         best_shd = acc['shd']
                         best_mse_loss = self.squared_loss(X_tilde, data).item()
-                    elif acc['shd'] < best_shd:
+                    elif acc['shd'] < best_shd and nx.is_directed_acyclic_graph(nx.DiGraph(W_est)):
                         best_shd = acc['shd']
                         best_epoch = epoch
                         best_shd_graph = W_est
                         np.save("causal_graph.npy", best_shd_graph) 
                         best_mse_loss = self.squared_loss(X_tilde, data).item()
-                    elif acc['shd'] == best_shd and self.squared_loss(X_tilde, data).item() < best_mse_loss:
+                    elif acc['shd'] == best_shd and self.squared_loss(X_tilde, data).item() < best_mse_loss and nx.is_directed_acyclic_graph(nx.DiGraph(W_est)):
                         best_mse_loss = self.squared_loss(X_tilde, data).item()
                         best_epoch = epoch
                         self.save_model()
                 else:
-                    if best_shd == np.inf and best_mse_loss == np.inf:
+                    if best_shd == np.inf and best_mse_loss == np.inf and nx.is_directed_acyclic_graph(nx.DiGraph(W_est)):
                         best_shd = acc['shd']
                         best_mse_loss = self.squared_loss(X_hat, data).item()
-                    elif acc['shd'] < best_shd:
+                    elif acc['shd'] < best_shd and nx.is_directed_acyclic_graph(nx.DiGraph(W_est)):
                         best_shd = acc['shd']
                         best_epoch = epoch
                         best_shd_graph = W_est
                         np.save("causal_graph.npy", best_shd_graph)  
                         best_mse_loss = self.squared_loss(X_hat, data).item()
-                    elif acc['shd'] == best_shd and self.squared_loss(X_hat, data).item() < best_mse_loss:
+                    elif acc['shd'] == best_shd and self.squared_loss(X_hat, data).item() < best_mse_loss and nx.is_directed_acyclic_graph(nx.DiGraph(W_est)):
                         best_mse_loss = self.squared_loss(X_hat, data).item()
                         best_epoch = epoch
                         self.save_model() 
@@ -604,7 +604,10 @@ class AAE_WGAN_GP(nn.Module):
                 if ground_truth is not None:
                     print("Optimization Finished!")
                     print("Best Epoch: {:04d}".format(best_epoch))
-                    print("Best SHD: {:04d}".format(best_shd))
+                    if best_shd == np.inf:
+                        print("Best SHD: inf")
+                    else:
+                        print("Best SHD: {:04d}".format(best_shd))
                     print("Best MSE Loss: {:.10f}".format(best_mse_loss))
                 else:
                     print("Optimization Finished!")
@@ -637,6 +640,7 @@ class AAE_WGAN_GP(nn.Module):
         rho, alpha, h = 1.0, 0.0, np.inf
         best_mse_loss, best_shd, best_epoch, best_shd_graph  = np.inf, np.inf, 0, []
         dis1, dis2, gen = [], [], []
+        X.pin_memory_device = ''
         for _ in range(max_iter):
             rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, mlp_inverse, mlp, X, lambda1, lambda2,
                                             rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, dis1, dis2, gen, ground_truth)
