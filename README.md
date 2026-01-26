@@ -106,6 +106,12 @@ python Main.py --graph_linear_type post_nonlinear_1
 python Main.py --graph_linear_type post_nonlinear_2
 ```
 
+To run DAGAF with benchmark, discrete data instead of continuous, change DATA_TYPE to benchmark
+```bash
+ python Main.py --data_type benchmark --path ./ --save_directory ./ --load_directory ./ # Benchmarks are provided in the data folder.
+```
+
+
 ## Citing DAGAF
 If you wish to use our framework, please cite the following paper:
 
