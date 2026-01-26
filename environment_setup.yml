@@ -1,4 +1,4 @@
-name: phd_env
+name: dagaf_env
 channels:
   - pytorch
   - nvidia
