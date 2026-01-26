@@ -63,6 +63,14 @@ After your environment is configured and activated you are good to go.
 ## Examples
 Here are some basic examples to get you started:
 
+To get started with DAGAF just execute the following:
+```bash
+python Main.py
+```
+This will execute the default state of our framework, where all of its parameters have been set in the Main.py file
+
+That being said, here are some interesting things you can do:
+
 ## Citing DAGAF
 If you wish to use our framework, please cite the following paper:
 
