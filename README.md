@@ -55,7 +55,7 @@ To run our code, users must first create a conda environment using our [environm
 
 To achieve this just run the following:
 ```
-conda env create -f environment.yml -n <env_name>
+conda env create -f environment_setup.yml -n <env_name>
 conda activate <env_name>
 ```
 After your environment is configured and activated you are good to go.
@@ -70,6 +70,41 @@ python Main.py
 This will execute the default state of our framework, where all of its parameters have been set in the Main.py file
 
 That being said, here are some interesting things you can do:
+
+To run DAGAF with different (SCM) toogle the flags for PNL and LINGAM for 0 to 1. You CANNOT set both flags to 1 at the same time.
+```bash
+python Main.py --pnl 1 # Changes the SCM from ANM (default) to PNL
+python Main.py --lingam 1 # Changes the SCM from ANM (default) to LiNGAM
+```
+
+To run DAGAF with different pipeline configurations, you can change the option in the SETTINGS flag
+```bash
+python Main.py --settings EP # Executes the entire pipeline, meaning all steps
+python Main.py --settings CSL # Executes only the Causal Structure Learning part
+python Main.py --settings DG --load_directory ./ # Executes only the Data Generation part.
+# Last one might crash if you overwrite the state_dict of your model incorrectly 
+```
+
+To run DAGAF with the same data, instead of generating new data everytime (default state), you can set the SYNTHESIZE flag to 0
+```bash
+python Main.py --synthesize 0 # Model will not generate new data and will run with the last data generated
+python Main.py # Model will generate new data because synthesize is set 1 by default
+```
+
+To run DAGAF with data of different dimensions, change the values of DATA_SAMPLE_SIZE (number of rows, default:5000) and DATA_VARIABLE_SIZE (number of columns, default:10)
+```bash
+python Main.py --data_sample_size 2500 --data_variable_size 50
+python Main.py --data_sample_size 4000 --data_variable_size 20
+```
+
+To run DAGAF with different types of continuous data, change the value of GRAPH_LINEAR_TYPE (default: non_linear_2). Below is a list of all possibilities
+```bash
+python Main.py --graph_linear_type linear 
+python Main.py --graph_linear_type nonlinear_1
+python Main.py --graph_linear_type nonlinear_2
+python Main.py --graph_linear_type post_nonlinear_1
+python Main.py --graph_linear_type post_nonlinear_2
+```
 
 ## Citing DAGAF
 If you wish to use our framework, please cite the following paper:
