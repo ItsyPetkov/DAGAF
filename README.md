@@ -28,6 +28,18 @@ For a more detailed theoretical and technical analysis, please read our paper: [
 
 We provide users with helpful visualizations (TLDR version of our paper) of the main features of our framework, which include the following: 1) a diagram of our entire framework with different steps included and 2) transition between different forms (basic form -> only working with ANM and LiNGAM; extended form -> working with PNL)
 
+<img src="https://github.com/ItsyPetkov/DAGAF/blob/main/imgs/DAGAF.png" alt="DAGAF Framework" />
+
+You can clearly see our pipeline is divided into three seperate steps. First, we perform causal discovery using a Structural Causal Model (SCM) to obtain a Directed Acyclic Graph (DAG) containing the underlying structure of the data. Second, we transfer the graph into to our Deep Generative Model (DGM). Third, we use the DGM with the causality obtained from Step 1 to simulate the generative mechanism of the input data, resulting in the generation of high-fidelity, realistic synthetic data.   
+
+<img src="https://github.com/ItsyPetkov/DAGAF/blob/main/imgs/forms_diagram.png" alt="DAGAF Forms" />
+
+A Visual Representation of DAGAF. (a) The optimization structure under ANM and LiNGAM, where input data is processed to reconstruct $\tilde{X}$ using multiple loss
+terms, excluding $L_{KLD}$ in the LiNGAM case. (b) The extended framework integrating ANM, LiNGAM, and PNL, where an additional inversion function $g^{−1}$ is introduced
+to compute $L_{PNL}$, unifying the optimization process. The dashed line signifies the skip connection. When PNL is not assumed the advanced form of the framework reverts
+back to its basic form capable of handling only ANM and LiNGAM by solely learning $f$. (c) The synthetic data generation process, illustrating how the framework enables 
+structured data synthesis while preserving underlying causal relationships.
+
 ## Insatallation
 
 The easiest way to gain access to our work is to clone the github repo using the following:
