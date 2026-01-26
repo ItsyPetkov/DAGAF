@@ -407,7 +407,7 @@ def simulate_sem(G: nx.DiGraph,
 
         if sem_type == 'linear-gauss':
             if linear_type == 'linear':
-                X[:, j, 0] = eta + np.random.normal(scale=noise_scale, size=n)
+                X[:, j, 0] = eta + np.random.uniform(high=noise_scale, size=n)
             elif linear_type == 'nonlinear_1':
                 X[:, j, 0] = eta + np.random.normal(scale=noise_scale, size=n)
             elif linear_type == 'nonlinear_2':
