@@ -4,7 +4,7 @@ Authors: Hristo Petkov, Calum MacLellan and Feng Dong
 
 Paper: DAGAF: A directed acyclic generative adversarial framework for joint structure learning and tabular data synthesis (Applied Intelligence, 31 March, 2025)
 
-DAGAF is a novel generative framework for simultaneous causal discovery and tabular data generation.
+DAGAF is a generative framework for simultaneous causal discovery and tabular data generation.
 
 #### Why use DAGAF?
 
@@ -40,7 +40,7 @@ to compute $L_{PNL}$, unifying the optimization process. The dashed line signifi
 back to its basic form capable of handling only ANM and LiNGAM by solely learning $f$. (c) The synthetic data generation process, illustrating how the framework enables 
 structured data synthesis while preserving underlying causal relationships.
 
-## Insatallation
+## Installation
 
 The easiest way to gain access to our work is to clone the github repo using the following:
 
@@ -55,8 +55,8 @@ To run our code, users must first create a conda environment using our [environm
 
 To achieve this just run the following:
 ```
-conda env create -f environment_setup.yml -n <env_name>
-conda activate <env_name>
+conda env create -f environment_setup.yml 
+conda activate dagaf_env
 ```
 After your environment is configured and activated you are good to go.
 
@@ -66,6 +66,7 @@ Here are some basic examples to get you started:
 To get started with DAGAF just execute the following:
 ```bash
 python Main.py
+python Main.py -h # This line will give you all of the arguments of the model
 ```
 This will execute the default state of our framework, where all of its parameters have been set in the Main.py file
 
