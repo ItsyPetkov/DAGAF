@@ -32,7 +32,10 @@ We provide users with helpful visualizations (TLDR version of our paper) of the 
 
 Since we have no releases, the easiest way to gain access to our work is to clone the github repo using the following:
 
-
+```bash
+git clone https://github.com/ItsyPetkov/DAGAF.git
+cd DAGAF
+```
 
 ## Citing DAGAF
 
