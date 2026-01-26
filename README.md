@@ -30,15 +30,28 @@ We provide users with helpful visualizations (TLDR version of our paper) of the 
 
 ## Insatallation
 
-Since we have no releases, the easiest way to gain access to our work is to clone the github repo using the following:
+The easiest way to gain access to our work is to clone the github repo using the following:
 
 ```bash
 git clone https://github.com/ItsyPetkov/DAGAF.git
 cd DAGAF
 ```
 
-## Citing DAGAF
+## Setting up your environment
 
+To run our code, users must first create a conda environment using our [environment_setup.yml](environment_setup.yml) file.
+
+To achieve this just run the following:
+```
+conda env create -f environment.yml -n <env_name>
+conda activate <env_name>
+```
+After your environment is configured and activated you are good to go.
+
+## Examples
+Here are some basic examples to get you started:
+
+## Citing DAGAF
 If you wish to use our framework, please cite the following paper:
 
 ```
