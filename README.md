@@ -24,6 +24,16 @@ Furthermore, supporting such a broad spectrum of identifiable models enables us 
 
 For a more detailed theoretical and technical analysis, please read our paper: [H. Petkov, C. MacLellan and F. Dong. DAGAF: A directed acyclic generative adversarial framework for joint structure learning and tabular data synthesis. Applied Intelligence, Springer, 31 March 2025.](https://link.springer.com/article/10.1007/s10489-025-06410-8) 
 
+## Visual aid for understanding critical concepts
+
+We provide users with helpful visualizations (TLDR version of our paper) of the main features of our framework, which include the following: 1) a diagram of our entire framework with different steps included and 2) transition between different forms (basic form -> only working with ANM and LiNGAM; extended form -> working with PNL)
+
+## Insatallation
+
+Since we have no releases, the easiest way to gain access to our work is to clone the github repo using the following:
+
+
+
 ## Citing DAGAF
 
 If you wish to use our framework, please cite the following paper:
