@@ -349,6 +349,7 @@ class AAE_WGAN_GP(nn.Module):
         self.mul2 = args.mul2
         self.alpha = args.alpha
         self.pnl = args.pnl
+        self.lingam = args.lingam
 
         self.lr_decay = args.lr_decay
         self.gamma = args.gamma
@@ -436,8 +437,11 @@ class AAE_WGAN_GP(nn.Module):
                         optimizer.zero_grad()
                         X_hat = model(data)
                         kld_loss = self.kl_gaussian_sem(X_hat)
-                        mmd_loss = self.compute_mmd(X_hat, data)  
-                        loss = self.squared_loss(X_hat, data) + kld_loss + mmd_loss
+                        mmd_loss = self.compute_mmd(X_hat, data)
+                        if self.lingam:
+                            loss = self.squared_loss(X_hat, data) + mmd_loss
+                        else:
+                            loss = self.squared_loss(X_hat, data) + kld_loss + mmd_loss
                         h_val = model.h_func()
                         penalty = 0.5 * rho * h_val * h_val + alpha * h_val
                         l2_reg = 0.5 * lambda2 * model.l2_reg()
@@ -640,6 +644,7 @@ class AAE_WGAN_GP(nn.Module):
         rho, alpha, h = 1.0, 0.0, np.inf
         best_mse_loss, best_shd, best_epoch, best_shd_graph  = np.inf, np.inf, 0, []
         dis1, dis2, gen = [], [], []
+        assert not (self.pnl == 1 and self.lingam == 1), "pnl and lingam flags cannot both be set to 1"
         for _ in range(max_iter):
             rho, alpha, h, best_shd, best_epoch, best_shd_graph, best_mse_loss = self.dual_ascent_step(model, discriminator, generator, discriminator1, mlp_inverse, mlp, X, lambda1, lambda2,
                                             rho, alpha, h, rho_max, best_epoch, best_shd, best_mse_loss, best_shd_graph, dis1, dis2, gen, ground_truth)
@@ -810,5 +815,7 @@ class AAE_WGAN_GP(nn.Module):
         return model, generator, discriminator, mlp, causal_graph
 
 
+
     
+
 
