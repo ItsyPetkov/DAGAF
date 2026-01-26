@@ -38,6 +38,7 @@ parser.add_argument("--settings", type=str, default="EP", choices=["EP", "CSL", 
 # configurations
 parser.add_argument("--synthesize", type=int, default=1, help="Flag for synthesing synthetic data")
 parser.add_argument("--pnl", type=int, default=0, help="Flag for Post-Non-Linear model") # otherwise Additive Noise Model is assumed
+parser.add_argument("--lingam", type=int, default=0, help="Flag for Linear non-Gaussian Acyclic model") # otherwise Additive Noise Model is assumed
 parser.add_argument("--data_type", type=str, default="synthetic", choices=["synthetic", "benchmark", "real"], help="choosing which experiment to do.")
 parser.add_argument("--data_sample_size", type=int, default=5000, help="the number of samples of data")
 parser.add_argument("--data_variable_size", type=int, default=10, help="the number of variables in synthetic generated data")
@@ -205,3 +206,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
